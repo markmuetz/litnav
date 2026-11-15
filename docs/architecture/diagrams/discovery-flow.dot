@@ -1,0 +1,16 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=LR;
+  items [label="items with DOI that\nallow LOOKUP", fillcolor="#FFF4D6", color="#C9A227"];
+  oa [label="OpenAlex: work by DOI\n+ reference list\n(net.Client, cached)", fillcolor="#F3E5F5", color="#8E44AD"];
+  g [label="graph.build()"];
+  gj [label="graph.json: nodes, links,\ncandidates (+ citers)\nedges table in index", fillcolor="#DCEBFA", color="#3B78B8"];
+  cand [label="litnav candidates\n(cited by >= N library papers,\nnot held, not skipped)"];
+  s2 [label="Semantic Scholar\nrecommendations\n(seeds' DOIs only)", fillcolor="#F3E5F5", color="#8E44AD"];
+  ex [label="litnav explore <seeds>"];
+  hold [label="Holdings: DOI, title,\nauthor+year prefix\n-> held / maybe / new", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  tf [label="discovery/to-fetch.tsv\n(status: blank / opened / skip)", fillcolor="#FFF4D6", color="#C9A227"];
+  web [label="web: Graph rings,\nDiscovery tab", fillcolor="#DFF3E3", color="#2E8B57"];
+  br [label="to-fetch open:\nDOI in your browser;\nyou save the PDF to _inbox/", fillcolor="#FFFFFF", color="#000000"];
+  imp [label="litnav import --apply\nprunes held rows"];
+  items -> oa -> g -> gj -> cand -> hold; items -> s2 [label="seeds"]; s2 -> ex -> hold;
+  hold -> tf [label="add / skip"]; gj -> web; tf -> web; tf -> br -> imp -> tf [label="prune", style=dashed];
+}

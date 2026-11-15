@@ -1,0 +1,25 @@
+digraph G {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.7];
+  node  [fontname="Helvetica", fontsize=9, shape=plaintext];
+  edge  [fontname="Helvetica", fontsize=8, color="#3B78B8"];
+  files [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#FFF4D6" COLOR="#C9A227"><TR><TD><B>papers/&lt;key&gt;/</B></TD></TR>
+    <TR><TD ALIGN="LEFT">ref.bib, meta.toml</TD></TR><TR><TD ALIGN="LEFT">text.txt</TD></TR><TR><TD ALIGN="LEFT">summary.json</TD></TR></TABLE>>];
+  items [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>items</B></TD></TR>
+    <TR><TD ALIGN="LEFT">key PK, title, authors, first_author, year,</TD></TR><TR><TD ALIGN="LEFT">journal, doi, tags, sharing, has_pdf, has_text,</TD></TR>
+    <TR><TD ALIGN="LEFT">summary, topic, abstract, n_chunks, sig</TD></TR></TABLE>>];
+  ifts [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>items_fts</B> (FTS5)</TD></TR><TR><TD ALIGN="LEFT">title, authors, tags, summary</TD></TR></TABLE>>];
+  secs [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>sections</B></TD></TR><TR><TD ALIGN="LEFT">(key, slug) PK, title, level,</TD></TR><TR><TD ALIGN="LEFT">kind, start, end, ord</TD></TR></TABLE>>];
+  chunks [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>chunks</B></TD></TR><TR><TD ALIGN="LEFT">id PK = key#section#hash8</TD></TR>
+    <TR><TD ALIGN="LEFT">key, section, section_title, kind, ord,</TD></TR><TR><TD ALIGN="LEFT">start, end, text, header, sharing, vhash</TD></TR></TABLE>>];
+  cfts [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>chunks_fts</B> (FTS5)</TD></TR><TR><TD ALIGN="LEFT">header, text</TD></TR></TABLE>>];
+  vec [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>vectors</B></TD></TR><TR><TD ALIGN="LEFT">vhash PK = hash(model, text)</TD></TR><TR><TD ALIGN="LEFT">model, dim, vec (float32 BLOB)</TD></TR></TABLE>>];
+  pvec [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>paper_vectors</B></TD></TR><TR><TD ALIGN="LEFT">key PK, vhash</TD></TR></TABLE>>];
+  edges [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>edges</B></TD></TR><TR><TD ALIGN="LEFT">(src, dst): src cites dst</TD></TR></TABLE>>];
+  bl [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>backlinks</B></TD></TR><TR><TD ALIGN="LEFT">(src note, dst key)</TD></TR></TABLE>>];
+  state [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>state</B></TD></TR><TR><TD ALIGN="LEFT">schema version</TD></TR></TABLE>>];
+  files -> items [label="index_item()\nwhen sig changes"];
+  items -> ifts; files -> secs [label="sections.parse()"]; secs -> chunks [label="chunks.chunk()"];
+  chunks -> cfts; chunks -> vec [label="embed.update()\nheader+text"]; items -> pvec [label="title+summary"]; pvec -> vec;
+  gr [label="litnav graph\n(OpenAlex)", shape=box, style="rounded,filled", fillcolor="#F3E5F5", color="#8E44AD", fontname="Helvetica"];
+  gr -> edges; notes [label="notes/*.md [@key]", shape=box, style="rounded,filled", fillcolor="#FFF4D6", color="#C9A227", fontname="Helvetica"]; notes -> bl;
+}

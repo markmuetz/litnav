@@ -1,0 +1,36 @@
+digraph G {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=11, nodesep=0.12, ranksep=0.35];
+  node  [fontname="Courier", fontsize=9, shape=box, style="filled", fillcolor="#FFF4D6", color="#C9A227", height=0.25];
+  edge  [color="#999999", arrowhead=none];
+  root [label="~/Papers/  (library root, a git repo)", fontname="Helvetica-Bold"];
+  lt   [label="library.toml   config: pdf_dir, default_sharing,\nlicensed_to_models, mailto, search, ask"];
+  papers [label="papers/<key>/"];
+  bibf [label="ref.bib        BibTeX, house style"];
+  metaf [label="meta.toml      sharing, tags, aliases, ids,\nrelations, files (pdf_sha256, text_source, licence)"];
+  textf [label="text.txt       extracted text (pdftotext / OCR)"];
+  summf [label="summary.json   topic, summary, keywords, provenance"];
+  notes [label="notes/<key>.md  concepts/  topics/  glossary.md"];
+  readd [label="reading/list.toml  recall.toml  (+ logs)"];
+  quiz  [label="quizzes/<key>.md   quiz + discussion logs"];
+  proj  [label="projects/<P>/papers.toml  README.md"];
+  disc  [label="discovery/to-fetch.tsv"];
+  der   [label="derived/themes.md"];
+  ev    [label="eval/questions.toml  eval/runs/*.json"];
+  cur   [label="curation/  author/journal canonical TSVs, drafts, preprints"];
+  st    [label=".litnav/   (gitignored; or index_dir outside a synced folder)", fillcolor="#DCEBFA", color="#3B78B8"];
+  sq    [label="index.sqlite   items, sections, chunks, FTS5, vectors, edges, backlinks", fillcolor="#DCEBFA", color="#3B78B8"];
+  gj    [label="graph.json     nodes, links, outside candidates (+ citers)", fillcolor="#DCEBFA", color="#3B78B8"];
+  ca    [label="cache/http/    cached API responses", fillcolor="#DCEBFA", color="#3B78B8"];
+  ip    [label="import-plan.tsv  summarize_batch.json  local.toml", fillcolor="#DCEBFA", color="#3B78B8"];
+  pd    [label="<pdf_dir>/  (pdfs/ by default; may be ~/Dropbox/...)", fontname="Helvetica-Bold", fillcolor="#FCEBD0"];
+  p1    [label="<key>.pdf     one per paper (untracked)", fillcolor="#FCEBD0"];
+  p2    [label="_inbox/       new downloads; subfolder = tag;\n_inbox/_confidential/ never read", fillcolor="#FCEBD0"];
+  p3    [label="_variants/    other copies (annotated, duplicates)", fillcolor="#FCEBD0"];
+  root -> {lt papers notes readd quiz proj disc der ev cur st};
+  papers -> {bibf metaf textf summf};
+  st -> {sq gj ca ip};
+  pd -> {p1 p2 p3};
+  legend [shape=plaintext, fillcolor="white", fontname="Helvetica", label=<
+    <TABLE BORDER="0" CELLSPACING="2"><TR><TD BGCOLOR="#FFF4D6">tracked in git</TD></TR>
+    <TR><TD BGCOLOR="#DCEBFA">derived, rebuildable</TD></TR><TR><TD BGCOLOR="#FCEBD0">PDFs, not tracked</TD></TR></TABLE>>];
+}

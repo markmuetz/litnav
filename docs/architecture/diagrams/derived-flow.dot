@@ -1,0 +1,14 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=TB;
+  sel [label="select(): items without a current\nsummary.json (or --tag / --force)"];
+  gate [label="outbound(): every item must allow\nlib.purpose(SEND_OUT)\n(licensed blocked if licensed_to_models = false)", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  stop [label="refuse: nothing sent", fillcolor="#FDE2E1", color="#C0392B"];
+  via [label="--via", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  bat [label="Batch API: one request per paper\nstate .litnav/summarize_batch.json\ncollect re-checks sharing + sha", fillcolor="#FDE2E1", color="#C0392B"];
+  cc [label="claude -p --json-schema, per paper\n--jobs N in parallel; Stop on auth/limit", fillcolor="#FDE2E1", color="#C0392B"];
+  wr [label="papers/<key>/summary.json\n(topic, summary, keywords, provenance)", fillcolor="#FFF4D6", color="#C9A227"];
+  idx [label="litnav index + embed\n(paper vectors use the summary)", fillcolor="#DCEBFA", color="#3B78B8"];
+  th [label="litnav themes [--update]\n(summaries of shareable papers -> Opus)", fillcolor="#FDE2E1", color="#C0392B"];
+  tm [label="derived/themes.md\n(update keeps existing themes verbatim)", fillcolor="#FFF4D6", color="#C9A227"];
+  sel -> gate; gate -> stop [label="no"]; gate -> via [label="yes"]; via -> bat [label="api"]; via -> cc [label="claude-code"];
+  bat -> wr; cc -> wr; wr -> idx; wr -> th -> tm;
+}

@@ -1,0 +1,12 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=LR;
+  add [label="litnav read add <key>\n--depth deep|read|skim|scan", fillcolor="#FFFFFF", color="#000000"];
+  list [label="reading/list.toml\nto read -> reading -> done", fillcolor="#FFF4D6", color="#C9A227"];
+  notes [label="notes/<key>.md (yours)\n[@key] citations -> backlinks", fillcolor="#FFF4D6", color="#C9A227"];
+  done [label="litnav read done <key>\n(depth actually done)"];
+  card [label="reading/recall.toml\nLeitner box 1-4, next_due", fillcolor="#FFF4D6", color="#C9A227"];
+  due [label="litnav due\n(MCP: reading_due)"];
+  rate [label="litnav recall <id>\nforgot|hard|medium|easy"];
+  quiz [label="quizzes/<key>.md\nquiz + discussion logs\n(litnav quiz, /litnav:discuss)", fillcolor="#FFF4D6", color="#C9A227"];
+  add -> list -> done; list -> notes [style=dashed]; done -> card [label="deep/read\n(skim if asked)"];
+  card -> due -> rate -> card; due -> quiz [label="discuss or quiz", style=dashed]; quiz -> rate [style=dashed];
+}

@@ -1,0 +1,12 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=LR;
+  t [label="sharing.allow(level, purpose)\n(the one table)", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  lp [label="Library.purpose(p)\nsend_out -> send_out_strict\nif licensed_to_models=false"];
+  items [label="Library.items(purpose)\nItem.allowed(purpose)"];
+  net [label="net.Client.get(purpose, items)\nraises Refused before sending"];
+  ob [label="derived.outbound(lib, items)"];
+  chk [label="chunks.sharing column\nsearch filters per chunk"];
+  ex [label="extract / OCR skip\nconfidential"];
+  lp -> t; items -> t; net -> t; ob -> t; chk -> t; ex -> t;
+  u1 [label="import, graph, explore,\nfind-doi lookups", fillcolor="#F3E5F5", color="#8E44AD"]; u2 [label="summarize, themes", fillcolor="#FDE2E1", color="#C0392B"]; u3 [label="MCP tools, Ask\n(Tools purpose send_out)", fillcolor="#FDE2E1", color="#C0392B"]; u4 [label="web app (owner, local)\nsearch & read: LOCAL"];
+  u1 -> net; u2 -> ob; u3 -> chk; u3 -> items; u4 -> chk;
+}

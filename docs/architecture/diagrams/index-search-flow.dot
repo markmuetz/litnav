@@ -1,0 +1,21 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=LR;
+  subgraph cluster_i { label="litnav index (incremental)"; style="rounded"; color="#3B78B8";
+    files [label="papers/<key>/*", fillcolor="#FFF4D6", color="#C9A227"];
+    sig [label="signature changed?\n(sizes+mtimes, chunker ver)", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+    sec [label="sections.parse(text)\nnumbered/known headings,\nabstract, captions, refs"];
+    ch [label="chunks.chunk()\n~300 words, 15% overlap\nid = key#sect#hash8"];
+    rows [label="items, sections, chunks,\nFTS5 tables\n(sharing copied to chunks)", fillcolor="#DCEBFA", color="#3B78B8"];
+    emb [label="embed.update()\nfastembed ONNX (local)\nvectors by hash(model,text)", fillcolor="#DCEBFA", color="#3B78B8"];
+    files -> sig -> sec [label="yes"]; sec -> ch -> rows -> emb;
+  }
+  subgraph cluster_s { label="search (search.py)"; style="rounded"; color="#2E8B57";
+    q [label="query + filters\n+ purpose", fillcolor="#FFFFFF", color="#000000"];
+    kw [label="keyword: FTS5 BM25\n\"quoted\" = required"];
+    sem [label="semantic: cosine over\nnormalised matrix (numpy)"];
+    rrf [label="hybrid: reciprocal rank\nfusion (k=60, pool 100)"];
+    filt [label="drop chunks whose sharing\ndoes not allow purpose;\nyear/tag/author/project filters"];
+    out [label="hits: chunk id, key, section,\nverbatim text, offsets, score"];
+    q -> kw; q -> sem; kw -> rrf; sem -> rrf; rrf -> filt -> out;
+  }
+  rows -> kw [style=dashed]; emb -> sem [style=dashed];
+}

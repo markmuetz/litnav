@@ -1,0 +1,36 @@
+digraph G {
+  graph [rankdir=TB, fontname="Helvetica", fontsize=11, nodesep=0.35, ranksep=0.55, compound=true, newrank=true];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"];
+  edge  [fontname="Helvetica", fontsize=8.5, color="#555555"];
+
+  user  [label="You\n(terminal, browser)", fillcolor="#FFFFFF", color="#000000"];
+  agent [label="Claude Code session\n(litnav plugin: skills + /litnav:discuss)", fillcolor="#FFFFFF", color="#000000"];
+
+  subgraph cluster_if { label="Interfaces"; style="rounded,filled"; fillcolor="#F4FBF5"; color="#2E8B57";
+    cli  [label="CLI\nlitnav <command>", fillcolor="#DFF3E3", color="#2E8B57"];
+    web  [label="Web app\nlitnav serve -> 127.0.0.1", fillcolor="#DFF3E3", color="#2E8B57"];
+    mcp  [label="MCP server\nlitnav mcp (stdio)", fillcolor="#DFF3E3", color="#2E8B57"];
+  }
+  subgraph cluster_core { label="Core library (src/litnav)"; style="rounded,filled"; fillcolor="#FAFAFA"; color="#666666";
+    work [label="Workflows (write)\nimport, summarize/themes, graph,\ndiscovery, reading/recall, rename"];
+    tools [label="Read-only tools (tools.py)\n+ Ask (ask.py)"];
+    srch [label="Index + search\nindex, sections, chunks, embed, search"];
+    model [label="Library model + sharing gate\nlibrary, meta, bib, keys, sharing", fillcolor="#E4E4E4"];
+    net [label="net.py\n(the only HTTP client)", fillcolor="#E4E4E4"];
+    { rank=same; work; tools; }
+  }
+  subgraph cluster_store { label="On your disk"; style="rounded,filled"; fillcolor="#FFFBF0"; color="#C9A227";
+    files [label="Library repo (git): papers/<key>/,\nnotes/, reading/, quizzes/, projects/ ...", fillcolor="#FFF4D6", color="#C9A227"];
+    pdfs  [label="PDF store\n<pdf_dir>/<key>.pdf, _inbox/", fillcolor="#FFF4D6", color="#C9A227"];
+    idx   [label="Derived (rebuildable)\n.litnav/index.sqlite, graph.json", fillcolor="#DCEBFA", color="#3B78B8"];
+  }
+  subgraph cluster_ext { label="Outside services"; style="rounded,filled"; fillcolor="#FBF5FC"; color="#8E44AD";
+    meta_apis [label="Crossref, arXiv, OpenAlex,\nSemantic Scholar (metadata)", fillcolor="#F3E5F5", color="#8E44AD"];
+    llm [label="Anthropic API  |  claude CLI\n(text, only if sharing allows)", fillcolor="#FDE2E1", color="#C0392B"];
+  }
+  user -> cli; user -> web; agent -> mcp; agent -> cli [style=dashed, label="via Bash"];
+  cli -> work; web -> tools [label="read, Ask"]; web -> work [label="tags, reading,\nto-fetch"]; mcp -> tools;
+  work -> model; work -> srch; tools -> srch; tools -> model;
+  model -> files; model -> pdfs; srch -> idx; srch -> files [label="reads", style=dashed];
+  work -> net; net -> meta_apis; work -> llm [label="summaries,\nthemes"]; tools -> llm [label="Ask", dir=both];
+}

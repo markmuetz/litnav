@@ -1,0 +1,24 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=TB;
+  inbox [label="PDF in <pdf_dir>/_inbox/[TAG/]", fillcolor="#FFF4D6", color="#C9A227"];
+  conf [label="in _inbox/_confidential/?", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  cfile [label="key from filename or --key\nno text read, no lookup\nsharing = confidential"];
+  text [label="pdftotext first pages\n(OCR if no text layer)"];
+  doi [label="1. DOI in text\n(or AMS SICI in filename)"];
+  arx [label="2. arXiv id\n(key gets _preprint)"];
+  tq  [label="3. title query\n(opening lines)"];
+  api [label="Crossref / arXiv API\nvia net.Client (LOOKUP)", fillcolor="#F3E5F5", color="#8E44AD"];
+  ver [label="verify: title's distinctive words\nin the front of the PDF?\n(>= 0.6 id, >= 0.75 title query)", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  dup [label="Catalogue.duplicate():\nPDF sha256, DOI, title, key", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  plan [label="plan rows -> .litnav/import-plan.tsv\nok | held | low-confidence | no-match", fillcolor="#DCEBFA", color="#3B78B8"];
+  rev [label="you review the dry run\n(litnav import)", fillcolor="#FFFFFF", color="#000000"];
+  app [label="litnav import --apply\n(or --from-plan)"];
+  item [label="papers/<key>/ ref.bib (normalised), meta.toml\n(sha256, tags, sharing, ids), text.txt\nPDF moved to <pdf_dir>/<key>.pdf", fillcolor="#FFF4D6", color="#C9A227"];
+  var [label="held: file to _variants/<key>.<date>.pdf", fillcolor="#FFF4D6", color="#C9A227"];
+  left [label="low-confidence / no-match:\nleft in _inbox/"];
+  post [label="prune to-fetch list;\nthen litnav index (+ summarize)"];
+  inbox -> conf; conf -> cfile [label="yes"]; conf -> text [label="no"];
+  text -> doi -> api; doi -> arx [label="none"]; arx -> api; arx -> tq [label="none"]; tq -> api;
+  api -> ver; ver -> dup [label="pass"]; ver -> plan [label="fail: low-confidence"];
+  dup -> plan [label="new: ok / dup: held"]; cfile -> plan;
+  plan -> rev -> app; app -> item [label="ok"]; app -> var [label="held"]; app -> left [label="others"]; item -> post;
+}

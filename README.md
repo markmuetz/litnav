@@ -69,3 +69,5 @@ looked up, summarised or shown to any tool.
 MIT. litnav stores *your* PDFs and the text extracted from them. Keep your
 library repo private: pushing the text of licensed papers somewhere public is
 redistribution.
+
+How it works inside: [docs/architecture](docs/architecture/README.md) (six documents with diagrams, also as PDFs).

@@ -1,0 +1,21 @@
+digraph G { graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.35]; node [fontname="Helvetica", fontsize=9.5, shape=box, style="rounded,filled", fillcolor="#EEEEEE", color="#666666"]; edge [fontname="Helvetica", fontsize=8, color="#555555"]; rankdir=LR;
+  user [label="You type a question\n(web: Ask tab)", fillcolor="#FFFFFF", color="#000000"];
+  post [label="POST /api/ask\n(token + Origin checked)"];
+  be [label="[ask] backend", shape=diamond, style=filled, fillcolor="#FFFFFF", fontsize=8.5];
+  subgraph cluster_api { label="backend = api"; style="rounded"; color="#C0392B";
+    loop [label="ask.py tool-use loop\n(streaming Messages API)"];
+    anth [label="Anthropic API", fillcolor="#FDE2E1", color="#C0392B"];
+    loop -> anth [label="question + tool results"]; anth -> loop [label="tool calls, text"];
+  }
+  subgraph cluster_cc { label="backend = claude-code"; style="rounded"; color="#C0392B";
+    cc [label="claude -p (temp dir,\nbuilt-in tools off,\nstrict MCP config)", fillcolor="#FDE2E1", color="#C0392B"];
+    mcp [label="litnav mcp (stdio)\nsubprocess"];
+    cc -> mcp [label="tool calls"]; mcp -> cc;
+  }
+  tools [label="Tools(purpose=send_out)\nsearch_literature, get_chunk,\nget_section, get_paper, ...\nconfidential invisible"];
+  idx [label="index.sqlite + files", fillcolor="#DCEBFA", color="#3B78B8"];
+  sse [label="Server-sent events:\nstatus, tool, tool_result,\ntext, done/error"];
+  page [label="app.js renders Markdown;\n[@key] and chunk ids\nbecome links", fillcolor="#DFF3E3", color="#2E8B57"];
+  user -> post -> be; be -> loop [label="api"]; be -> cc [label="claude-code"];
+  loop -> tools; mcp -> tools; tools -> idx; loop -> sse; cc -> sse [label="stream-json"]; sse -> page;
+}

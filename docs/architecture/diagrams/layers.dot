@@ -1,0 +1,12 @@
+digraph G {
+  graph [rankdir=TB, fontname="Helvetica", fontsize=11, ranksep=0.25, nodesep=0.2];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="filled", width=7.2, fixedsize=false];
+  edge  [style=invis];
+  l5 [label="People and agents: you in a terminal or browser; Claude Code with the litnav plugin (skills, /litnav:discuss)", fillcolor="#FFFFFF", color="#000000"];
+  l4 [label="Interfaces: CLI (commands/*)  |  web app (web/app.py)  |  MCP server (mcp_server.py)  |  Ask (ask.py)", fillcolor="#DFF3E3", color="#2E8B57"];
+  l3 [label="Tools and workflows: tools.py (read-only)  |  importer, derived, discovery, graph, reading, quizzes, rename, evaluate", fillcolor="#EEEEEE", color="#666666"];
+  l2 [label="Derived index: index.py, sections.py, chunks.py, embed.py, search.py  ->  .litnav/index.sqlite (rebuildable)", fillcolor="#DCEBFA", color="#3B78B8"];
+  l1 [label="Library model: library.py (Item, Library), meta.py, bib.py, keys.py, sharing.py, config.py, util.py, net.py", fillcolor="#E4E4E4", color="#666666"];
+  l0 [label="Files (the truth): papers/<key>/{ref.bib, meta.toml, text.txt, summary.json}, notes, reading, projects; PDFs in <pdf_dir>", fillcolor="#FFF4D6", color="#C9A227"];
+  l5 -> l4 -> l3 -> l2 -> l1 -> l0;
+}
