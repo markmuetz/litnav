@@ -40,6 +40,19 @@ repo, set `track_text = false` in `library.toml` first.
 - `reading/`: reading list and recall state
 """
 
+EVAL_QUESTIONS = """\
+# Questions for `litnav eval`, which measures how well search finds the right
+# papers. Write 20-50 real questions you would ask your library, each with the
+# papers a good answer must find. Uncomment and copy the example.
+#
+# [[question]]
+# q = "what sets the angle of a squall line to the low-level shear?"
+# keys = ["smith2021cold"]           # papers a good answer must find
+# passages = ["cold pool speed"]     # optional: words an expected passage contains
+# kind = "paraphrase"                # exact-name, paraphrase or concept
+# written_from = "memory"            # memory, notes or summary
+"""
+
 SYNCED = ("dropbox", "onedrive", "icloud", "mobile documents", "google drive", "box sync")
 
 
@@ -70,6 +83,7 @@ def init(target: Path, *, git: bool = True, licensed_to_models: bool = True, log
     atomic_write(root / ".gitignore", GITIGNORE)
     atomic_write(root / ".gitattributes", GITATTRIBUTES)
     atomic_write(root / "README.md", README)
+    atomic_write(root / "eval" / "questions.toml", EVAL_QUESTIONS)
     for d in ("notes", "concepts", "topics", "projects", "quizzes", "reading", "derived",
               "curation", "eval", "papers"):
         keep = root / d / ".gitkeep"

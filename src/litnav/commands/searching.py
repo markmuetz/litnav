@@ -1,9 +1,10 @@
-"""search, similar."""
+"""search, similar, eval."""
 from __future__ import annotations
 
 import json
 import sys
 import textwrap
+from pathlib import Path
 
 from .. import index, search
 from ..library import Library
@@ -27,6 +28,13 @@ def add(sub):
     p.add_argument("-k", type=int, default=10)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_similar)
+
+    p = sub.add_parser("eval", help="measure search against eval/questions.toml (recall@10, MRR)")
+    p.add_argument("--save", action="store_true", help="save the run to eval/runs/<date>-<git>.json")
+    p.add_argument("--compare", nargs=2, metavar=("A", "B"), help="compare two saved runs (B against A)")
+    p.add_argument("--metric", choices=["mrr", "recall"], default="mrr")
+    p.add_argument("--rows", action="store_true", help="show every question's scores")
+    p.set_defaults(func=cmd_eval)
 
 
 def filters_from(a, lib) -> search.Filters:
@@ -95,3 +103,23 @@ def cmd_similar(a):
         return
     for r in res:
         print(f"{r['score']:.3f}  {r['key']:36s} {r['year'] or '':>4}  {r['title'][:80]}")
+
+
+def cmd_eval(a):
+    import json
+    from .. import evaluate
+    lib = Library.find(a.library)
+    if a.compare:
+        ra, rb = (json.loads(Path(x).read_text()) for x in a.compare)
+        print(evaluate.compare(ra, rb, a.metric))
+        return
+    res = evaluate.run(lib, embedder_for(lib))
+    print(evaluate.report(res))
+    if a.rows:
+        for r in res["rows"]:
+            cells = "  ".join(f"{c}={v[a.metric]:.2f}" for c, v in r.items() if "/" in c)
+            print(f"- {r['q'][:60]:60s} {cells}")
+    if a.save:
+        out = lib.root / "eval" / "runs" / f"{res['date']}-{res['litnav_git'] or 'nogit'}.json"
+        evaluate.save(res, out)
+        print(f"saved {out}")
