@@ -64,6 +64,9 @@ def _to_rows(cs, source):
 def cmd_candidates(a):
     lib = Library.find(a.library)
     cs = D.candidates(lib, min_cites=a.min_cites, show_skipped=a.skipped)[:a.limit]
+    if not cs:
+        print(f"No candidates cited by {a.min_cites}+ library papers that you don't already have.")
+        return
     if a.json:
         print(json.dumps(cs, indent=1))
     else:
