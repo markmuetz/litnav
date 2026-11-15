@@ -241,12 +241,15 @@ def _claude_code(lib, question, history):
             json.dump(mcp, fh)
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                "--mcp-config", cfgp, "--strict-mcp-config", "--tools", "",
+               # no transcript of library passages, none of the user's settings or memory
+               "--no-session-persistence", "--setting-sources", "", "--disable-slash-commands",
                "--allowedTools", "mcp__litnav", "--append-system-prompt", SYSTEM]
         model = lib.config.get("ask", {}).get("claude_code_model")
         if model:
             cmd += ["--model", model]
         yield {"type": "status", "message": "asking Claude Code ..."}
-        p = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        errf = open(os.path.join(td, "stderr.txt"), "w+")    # a file, so a full pipe can't block
+        p = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=errf, text=True)
         names = {}
         for line in p.stdout:
             try:
@@ -275,6 +278,8 @@ def _claude_code(lib, question, history):
                 yield {"type": "error", "message": str(ev.get("result", "Claude Code failed"))[:500]}
         p.wait()
         if p.returncode:
-            err = p.stderr.read()[-500:]
+            errf.seek(0)
+            err = errf.read()[-500:]
             yield {"type": "error", "message": f"claude exited {p.returncode}: {err}"}
+        errf.close()
     yield {"type": "done"}
