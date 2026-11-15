@@ -2,7 +2,7 @@
 
     <root>/papers/<key>/ref.bib      bibliographic record (house style)
     <root>/papers/<key>/meta.toml    tags, sharing, ids, relations, files
-    <root>/papers/<key>/text.md      extracted text with section headings
+    <root>/papers/<key>/text.txt     extracted text (raw; sections found at index time)
     <root>/papers/<key>/summary.json generated summary
     <pdf_dir>/<key>.pdf              the PDF
 
@@ -41,11 +41,15 @@ class Item:
     @property
     def meta_path(self) -> Path: return self.dir / "meta.toml"
     @property
-    def text_path(self) -> Path: return self.dir / "text.md"
+    def text_path(self) -> Path: return self.dir / "text.txt"
     @property
     def summary_path(self) -> Path: return self.dir / "summary.json"
     @property
-    def pdf_path(self) -> Path: return self.lib.pdf_dir / f"{self.key}.pdf"
+    def pdf_path(self) -> Path:
+        """<pdf_dir>/<key>.pdf, unless meta [files] pdf_path names another
+        file inside pdf_dir (for collections kept in a subfolder)."""
+        rel = self.meta.get("files", {}).get("pdf_path")
+        return self.lib.pdf_dir / (rel or f"{self.key}.pdf")
 
     @property
     def has_pdf(self) -> bool: return self.pdf_path.is_file()
