@@ -80,7 +80,7 @@ class Item:
         return list(self.meta.get("tags", []))
 
     def allowed(self, purpose: str) -> bool:
-        return S.allow(self.sharing, purpose)
+        return S.allow(self.sharing, self.lib.purpose(purpose))
 
     @property
     def title(self) -> str:
@@ -165,6 +165,12 @@ class Library:
         self.state_dir = self.root / config.STATE_DIR
         self._aliases: dict[str, str] | None = None
         self._fold: dict[str, str] | None = None
+        # The owner's answer at `init`: may licensed papers' text go to a model?
+        self.licensed_to_models = bool(self.config["library"].get("licensed_to_models", True))
+
+    def purpose(self, purpose: str) -> str:
+        """Map a purpose through this library's policy (see sharing.effective)."""
+        return S.effective(purpose, self.licensed_to_models)
 
     @classmethod
     def find(cls, explicit=None) -> "Library":

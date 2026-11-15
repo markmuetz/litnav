@@ -11,16 +11,20 @@ LEVELS = ("open", "licensed", "private", "confidential")
 # Purposes, from least to most exposure.
 LOCAL = "local"                  # owner, on this machine: everything
 SEND_OUT = "send_out"            # text sent to an outside model or service for the owner
+# SEND_OUT in a library whose owner said no to sending licensed text to models
+# (library.toml: licensed_to_models = false). Callers never pass this
+# themselves: Library.purpose() maps SEND_OUT to it.
+SEND_OUT_STRICT = "send_out_strict"
 LOOKUP = "lookup"                # metadata (DOI, title) sent to Crossref/OpenAlex etc.
 SERVE_META = "serve_meta"        # metadata, abstract, summary served to someone else
 SERVE_TEXT = "serve_text"        # full text served to someone else
 
-PURPOSES = (LOCAL, SEND_OUT, LOOKUP, SERVE_META, SERVE_TEXT)
+PURPOSES = (LOCAL, SEND_OUT, SEND_OUT_STRICT, LOOKUP, SERVE_META, SERVE_TEXT)
 
 _ALLOW = {
-    "open":         {LOCAL, SEND_OUT, LOOKUP, SERVE_META, SERVE_TEXT},
+    "open":         {LOCAL, SEND_OUT, SEND_OUT_STRICT, LOOKUP, SERVE_META, SERVE_TEXT},
     "licensed":     {LOCAL, SEND_OUT, LOOKUP, SERVE_META},
-    "private":      {LOCAL, SEND_OUT, LOOKUP},
+    "private":      {LOCAL, SEND_OUT, SEND_OUT_STRICT, LOOKUP},
     "confidential": {LOCAL},
 }
 
@@ -36,3 +40,10 @@ def allow(level: str, purpose: str) -> bool:
         raise ValueError(f"unknown purpose {purpose!r}")
     # An unknown level (a hand-edited typo) is treated as the most restrictive.
     return purpose in _ALLOW.get(level, _ALLOW["confidential"])
+
+
+def effective(purpose: str, licensed_to_models: bool) -> str:
+    """The purpose to check, given the library's answer to `init`'s question."""
+    if purpose == SEND_OUT and not licensed_to_models:
+        return SEND_OUT_STRICT
+    return purpose

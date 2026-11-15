@@ -19,7 +19,10 @@ MAX_SECTION_CHARS = 12000
 
 class Tools:
     def __init__(self, lib, purpose: str = S.SEND_OUT, embedder=None):
-        self.lib, self.purpose = lib, purpose
+        self.lib, self.purpose = lib, lib.purpose(purpose)
+        # Metadata (title, authors, keys, section titles) still goes to the model
+        # when the owner said no to licensed text: it is what lookups send anyway.
+        self.meta_purpose = S.LOOKUP if self.purpose == S.SEND_OUT_STRICT else self.purpose
         self.con = index.connect(lib, readonly=True)
         self._embedder = embedder
         self._emb_loaded = embedder is not None
@@ -40,7 +43,7 @@ class Tools:
         if not k:
             raise ValueError(f"no paper {key!r}")
         it = self.lib.get(k)
-        need = self.purpose
+        need = self.purpose if need_text else self.meta_purpose
         if self.purpose in (S.SERVE_META, S.SERVE_TEXT) and need_text:
             need = S.SERVE_TEXT
         if not it.allowed(need):
@@ -94,7 +97,7 @@ class Tools:
         d = it.as_dict(self.purpose)
         r = self.con.execute("SELECT abstract, n_chunks, sections_detected FROM items WHERE key=?",
                              (it.key,)).fetchone()
-        if r:
+        if r and it.allowed(self.purpose):
             d.update(abstract=r["abstract"], n_chunks=r["n_chunks"])
         return d
 
@@ -107,9 +110,9 @@ class Tools:
             out["cited_by"] = [r[0] for r in self.con.execute("SELECT src FROM edges WHERE dst=?", (it.key,))]
         if direction in ("similar", "both") and self.embedder is not None:
             out["similar"] = [s["key"] for s in search.similar(
-                self.con, it.key, self.embedder.name, k=k, purpose=self.purpose)]
+                self.con, it.key, self.embedder.name, k=k, purpose=self.meta_purpose)]
         for kk, v in out.items():
-            out[kk] = [x for x in v if self.lib.get(x).allowed(self.purpose)][:k]
+            out[kk] = [x for x in v if self.lib.get(x).allowed(self.meta_purpose)][:k]
         return out
 
     def list_papers(self, author: str | None = None, year_from: int | None = None,
@@ -126,7 +129,7 @@ class Tools:
             w.append("(',' || tags || ',') LIKE ?"); a.append(f"%,{tag},%")
         for t in (title_words or "").split():
             w.append("title LIKE ?"); a.append(f"%{t}%")
-        lv = [l for l in S.LEVELS if S.allow(l, self.purpose)]
+        lv = [l for l in S.LEVELS if S.allow(l, self.meta_purpose)]
         w.append(f"sharing IN ({','.join('?' * len(lv))})"); a += lv
         rows = self.con.execute(f"SELECT key, title, year, authors FROM items WHERE {' AND '.join(w)} "
                                 f"ORDER BY year DESC LIMIT ?", a + [min(int(k), 100)])

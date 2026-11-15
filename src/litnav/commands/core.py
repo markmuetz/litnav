@@ -13,6 +13,8 @@ def add(sub):
     p = sub.add_parser("init", help="create a new library")
     p.add_argument("dir")
     p.add_argument("--no-git", action="store_true")
+    p.add_argument("--licensed-to-models", choices=["yes", "no"],
+                   help="may the text of licensed papers be sent to a model? (asked if not given)")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("list", help="list items")
@@ -55,8 +57,18 @@ def add(sub):
 
 
 def cmd_init(a):
-    from ..init import init
-    init(Path(a.dir), git=not a.no_git)
+    from ..init import ask_licensed_to_models, init
+    if a.licensed_to_models:
+        ok = a.licensed_to_models == "yes"
+    elif sys.stdin.isatty():
+        ok = ask_licensed_to_models()
+    else:
+        ok = True
+        print("note: licensed papers' text may be sent to a model (no terminal to ask); "
+              "set licensed_to_models = false in library.toml to change this")
+    init(Path(a.dir), git=not a.no_git, licensed_to_models=ok)
+    print("licensed papers' text " + ("may" if ok else "will not") + " be sent to a model "
+          "(library.toml: licensed_to_models)")
 
 
 def cmd_list(a):

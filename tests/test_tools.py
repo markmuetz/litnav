@@ -66,3 +66,35 @@ def test_reading_and_recall(lib):
     lib.create_item("b2020x", BIB)
     reading.mark_done(lib, "b2020x", "scan", today=fri)
     assert [c["id"] for c in reading.load_cards(lib)] == ["a2020x"]
+
+
+def test_licensed_to_models_false(ilib):
+    """The owner said no at init: licensed text never reaches a model, but
+    metadata does; open papers and local use are unaffected."""
+    p = ilib.root / "library.toml"
+    p.write_text(p.read_text().replace("licensed_to_models = true", "licensed_to_models = false"))
+    from litnav.library import Library
+    lib = Library(ilib.root)
+    assert lib.purpose(S.SEND_OUT) == S.SEND_OUT_STRICT
+    t = Tools(lib, purpose=S.SEND_OUT, embedder=None)
+    hits = t.search_literature("cold pools", mode="keyword", k=25)
+    assert {h["key"] for h in hits} == {"jones2019gravity"}
+    paper = t.get_paper("smith2021cold")
+    assert paper["title"] and "abstract" not in paper and "summary" not in paper
+    sec = t.list_sections("smith2021cold")[0]["slug"]
+    with pytest.raises(PermissionError):
+        t.get_section("smith2021cold", sec)
+    assert "smith2021cold" in {r["key"] for r in t.list_papers()}
+    assert "doe2026plans_draft" not in {r["key"] for r in t.list_papers()}
+    assert lib.get("smith2021cold").allowed(S.LOCAL)
+    assert t.get_section("jones2019gravity", t.list_sections("jones2019gravity")[0]["slug"])["text"]
+
+
+def test_init_question(tmp_path):
+    from litnav.init import ask_licensed_to_models, init
+    from litnav.library import Library
+    answers = iter(["maybe", "n"])
+    assert ask_licensed_to_models(input_=lambda _: next(answers), log=lambda *a: None) is False
+    root = init(tmp_path / "l", git=False, licensed_to_models=False, log=lambda *a: None)
+    assert Library(root).licensed_to_models is False
+    assert Library(init(tmp_path / "m", git=False, log=lambda *a: None)).licensed_to_models is True

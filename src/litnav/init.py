@@ -29,11 +29,11 @@ README = """\
 Managed with [litnav](https://github.com/markmuetz/litnav).
 
 **Keep this repository private.** It holds the text extracted from your
-papers (`papers/*/text.md`). For papers you hold under a publisher or
+papers (`papers/*/text.txt`). For papers you hold under a publisher or
 university licence, publishing that text is redistribution. To publish this
 repo, set `track_text = false` in `library.toml` first.
 
-- `papers/<key>/`: one folder per paper (`ref.bib`, `meta.toml`, `text.md`,
+- `papers/<key>/`: one folder per paper (`ref.bib`, `meta.toml`, `text.txt`,
   `summary.json`)
 - `pdfs/`: the PDFs, `<key>.pdf` (not tracked). Drop new ones in `pdfs/_inbox/`.
 - `notes/`, `concepts/`, `topics/`: your own writing. Cite papers as `[@key]`.
@@ -48,7 +48,7 @@ def in_synced_folder(p: Path) -> bool:
     return any(x in s for x in SYNCED)
 
 
-def init(target: Path, *, git: bool = True, log=print) -> Path:
+def init(target: Path, *, git: bool = True, licensed_to_models: bool = True, log=print) -> Path:
     root = Path(target).expanduser().resolve()
     if (root / config.CONFIG_NAME).exists():
         raise FileExistsError(f"{root} is already a litnav library")
@@ -57,6 +57,8 @@ def init(target: Path, *, git: bool = True, log=print) -> Path:
     for d in DIRS:
         (root / d).mkdir(parents=True, exist_ok=True)
     cfg = config.LIBRARY_TOML
+    if not licensed_to_models:
+        cfg = cfg.replace("licensed_to_models = true\n", "licensed_to_models = false\n", 1)
     if in_synced_folder(root):
         # SQLite in a synced folder gets corrupted by the sync client.
         cache = Path.home() / ".cache" / "litnav" / root.name
@@ -92,3 +94,25 @@ def _git_init(root: Path, log) -> None:
     if r.returncode != 0:
         log("warning: could not make the first commit (is git user.name/user.email set?):\n"
             + r.stderr.strip())
+
+
+QUESTION = """\
+Papers you hold under a publisher or university licence are `licensed` (the
+default sharing level). Ask, summaries and agents work by sending passages of
+a paper's text to a model (Anthropic's, through the API or Claude Code). Some
+publishers' text-mining terms restrict this; check your institution's
+guidance if unsure. `open` papers are unaffected, and `confidential` ones
+never leave this machine.
+"""
+
+
+def ask_licensed_to_models(input_=input, log=print) -> bool:
+    """The one question `init` asks. The answer is stored in library.toml
+    (licensed_to_models) and can be changed there later."""
+    log(QUESTION)
+    while True:
+        a = input_("May the text of licensed papers be sent to a model? [Y/n] ").strip().lower()
+        if a in ("", "y", "yes"):
+            return True
+        if a in ("n", "no"):
+            return False

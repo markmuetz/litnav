@@ -19,6 +19,7 @@ DEFAULTS: dict = {
         "pdf_dir": "pdfs",             # relative to the library root, or absolute
         "default_sharing": "licensed",
         "track_text": True,
+        "licensed_to_models": True,
         "mailto": "",                  # for the Crossref/OpenAlex polite pools
     },
     "keys": {
@@ -52,9 +53,13 @@ LIBRARY_TOML = '''\
 pdf_dir = "pdfs"
 # Sharing level for new items: open, licensed, private or confidential.
 default_sharing = "licensed"
-# Track extracted text (papers/<key>/text.md) in git. Keep this library repo
+# Track extracted text (papers/<key>/text.txt) in git. Keep this library repo
 # private if true: the text of licensed papers must not be published.
 track_text = true
+# May the text of `licensed` papers be sent to a model (Ask, summaries, agents)?
+# Asked once by `litnav init`. `open` and `private` papers are unaffected;
+# `confidential` papers never leave the machine.
+licensed_to_models = true
 # Email for the Crossref/OpenAlex polite pools (optional; sent with API requests).
 mailto = ""
 

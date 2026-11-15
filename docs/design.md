@@ -198,9 +198,15 @@ someone else (another person's agent, a group hackathon setup)?
 | level | outside model/service | served to others | default for |
 |---|---|---|---|
 | `open` | yes | full text | open-access papers (set automatically from OpenAlex's licence) |
-| `licensed` | yes | metadata, abstract, summary only | every other imported paper |
+| `licensed` | yes, unless the owner said no at `init` (then metadata only) | metadata, abstract, summary only | every other imported paper |
 | `private` | yes | nothing | things the owner wants kept to themselves |
 | `confidential` | **no**: no text extraction, no summary, no OCR, no embedding, no DOI or title lookup | nothing | co-authored drafts, anything the owner marks |
+
+Whether licensed text may go to a model is asked once, by `litnav init`, and
+stored as `licensed_to_models` in `library.toml` (decided 2026-11-15: litnav
+is primarily for one user, so one answer per library). With `false`,
+`send_out` is mapped to a stricter purpose that admits `open` and `private`
+text only; metadata still goes, as it does for lookups.
 
 Enforced in one place: `Library.items(purpose=...)`, where `purpose` is
 `local`, `send_out` or `serve_others`. Every command and MCP tool asks for the
