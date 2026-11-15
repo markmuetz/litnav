@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from .extract import normalise_text
 
-VERSION = 1
+VERSION = 2       # 2: headings wrapped onto a second line are joined
 
 KNOWN = {
     "abstract": "abstract", "summary": "abstract", "key points": "front",
@@ -93,6 +93,24 @@ def _page_norm(l: str) -> str:
     return re.sub(r"\d+", "#", l.lower())
 
 
+# A heading that ends on one of these has wrapped onto the next line.
+TRAILING = {"the", "of", "and", "in", "on", "to", "for", "with", "a", "an", "from", "by", "at",
+            "between", "over", "under", "into", "its", "their", "as", "or", "versus", "vs"}
+
+
+def _wrapped(title: str, lines: list[str], i: int) -> str | None:
+    """The continuation of a heading cut at line i, or None."""
+    w = title.split()
+    if not w or w[-1].lower() not in TRAILING or i + 1 >= len(lines):
+        return None
+    nxt = lines[i + 1].strip()
+    if not nxt or len(nxt) > 70 or NUM.match(nxt) or not _plausible_title(nxt):
+        return None
+    if nxt.endswith(".") and not nxt.endswith(("?", "!")):
+        return None
+    return nxt
+
+
 def _clean_title(t: str) -> str:
     t = re.sub(r"\s+", " ", t).strip().rstrip(".:")
     return t.title() if t.isupper() and len(t) > 3 else t
@@ -149,7 +167,9 @@ def parse(raw: str, manual: bool = False) -> Parsed:
         if m and prev_blank and _plausible_title(m.group("title")):
             num = m.group("num")
             parts = [ROMANS[num]] if num in ROMANS else [int(x) for x in num.split(".")]
-            title = _clean_title(m.group("title"))
+            raw_title = m.group("title")
+            cont = _wrapped(raw_title, lines, i)
+            title = _clean_title(raw_title + (" " + cont if cont else ""))
             if len(parts) == 1:
                 n = parts[0]
                 if (top == 0 and n in (1, 2)) or n == top + 1:

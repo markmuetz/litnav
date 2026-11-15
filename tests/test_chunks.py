@@ -115,3 +115,12 @@ def test_manual_sections_opt_in():
     t = "# Intro\nsome text here\n# Methods\nmore text\n"
     assert sections.parse(t).method != "manual"
     assert sections.parse(t, manual=True).method == "manual"
+
+
+def test_wrapped_heading_joined():
+    from litnav import sections
+    body = "Some text here that is long enough to be a paragraph of the paper.\n\n"
+    raw = ("1. Introduction\n" + body + "2. Does the Orientation of the Lines Match the\n"
+           "RKW Hypothesis?\n" + body + "3. Conclusions\n" + body)
+    titles = [s.title for s in sections.parse(raw).sections]
+    assert "Does the Orientation of the Lines Match the RKW Hypothesis?" in titles
