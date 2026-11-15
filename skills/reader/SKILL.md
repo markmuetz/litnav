@@ -13,7 +13,7 @@ description: Help the user read and remember papers in their litnav library — 
 | `reading/recall.toml` | recall cards: `id` (a key or `concept:<slug>`), `box`, `last_reviewed`, `next_due`, `prompt` |
 | `notes/<key>.md` | the user's notes; cite papers as `[@key]` |
 | `concepts/<slug>.md` | concept notes |
-| `quizzes/<key>.md` | quiz log: question, reference answer, result |
+| `quizzes/<key>.md` | quiz and discussion logs, one dated section per session (`litnav quiz list/show/start`) |
 
 Commands: `litnav read add <key> --depth <d>`, `litnav read done <key> --depth <d>`,
 `litnav read list [--all]`, `litnav due`, `litnav recall <id> <rating>`.
@@ -25,6 +25,35 @@ A depth is a time budget, set when a paper is added (ask if the user gives
 none): `deep` (half a day or more; notes, quiz, recall card), `read` (2–4 h;
 notes, recall card), `skim` (30–60 min; a short gist; a card only if asked),
 `scan` (~20 min; no notes, no card), `comment` (someone's draft; no card).
+
+## Discuss (instead of, or as well as, a quiz)
+
+Started by `/litnav:discuss <key>` or "let's discuss <paper>". The user
+explains the paper in their own words and you probe; retrieval comes first,
+so the user always speaks before you explain anything.
+
+- **Prepare quietly**: the paper's metadata, the user's notes, the earlier
+  quiz/discussion log (`litnav quiz show <id>`), the section list, and
+  whether a recall card is due. Show none of it.
+- **Open broad, then wait**: "What was it trying to find out, and what did
+  it find?" Never open with a summary.
+- **One short question at a time**, built on their last answer: mechanisms
+  (why, how), sensitivity (what would change the result), placement (how it
+  relates to other library papers, cited as `[@key]`), verdict (would they
+  trust it, cite it, for what). Prefer what the notes don't cover. Keep your
+  turns short; this is their thinking, not your lecture.
+- **Correct only from the paper**: check with `search_literature` or
+  `get_section` before saying they are wrong, then give a short verbatim
+  quote and its chunk ID. If you can't find support either way, say so.
+- **Depth follows timing**: within a few days of reading, details and
+  mechanisms are fair game; after that, the gist only, and forgotten details
+  are not misses.
+- **If they ask you to explain**, do: briefly, then hand back with a
+  question.
+- **Close** with a log in `quizzes/<id>.md` (`litnav quiz start <id>
+  --discuss`, then fill in: explained well, shaky, missing, corrections with
+  chunk IDs). A due recall card can be rated from the discussion, on the
+  gist, once the user agrees. Suggest note additions; don't make them.
 
 ## Rules
 

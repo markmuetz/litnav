@@ -113,6 +113,12 @@ litnav recall smith2021cold easy               # forgot, hard, medium, easy
 
 Write notes in `notes/<key>.md`; cite papers as `[@key]`.
 
+To consolidate a paper you have read, talk it through rather than take a
+quiz: in Claude Code, `/litnav:discuss <key>`. You explain it in your own
+words first; Claude asks follow-up questions, corrects you only from the
+paper itself (quoting the passage), and logs what was solid and what was
+shaky in `quizzes/<key>.md`.
+
 ## 8. Claude Code
 
 ```sh

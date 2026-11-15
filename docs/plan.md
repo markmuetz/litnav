@@ -354,6 +354,8 @@ milestone text above where the two differ.
 
 ## Next (2026-11-15)
 
+All ten done on 2026-11-15 (v0.1.0 tagged after item 6).
+
 1. Migrate the author's own reading data into their library (private script, not in this repo).
 2. Freeze the old litman data; the author moves to litnav this week.
 3. Fold new papers into the theme report (`themes --update`).
