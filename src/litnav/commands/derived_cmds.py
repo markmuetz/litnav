@@ -22,6 +22,8 @@ def add(sub):
                    f"{derived.CLAUDE_CODE_SUMMARY_MODEL} (claude-code)")
     p.add_argument("--dry-run", "-n", action="store_true", help="list what would be summarized")
     p.add_argument("--yes", "-y", action="store_true", help="don't ask before a long claude-code run")
+    p.add_argument("--jobs", "-j", type=int, default=1,
+                   help="claude-code: papers at a time (e.g. 5); uses your plan's usage that much faster")
     p.set_defaults(func=cmd_summarize)
     add_themes(sub)
 
@@ -56,13 +58,13 @@ def cmd_summarize(a):
             print(f"  {it.key}")
         return
     if via == "claude-code":
-        mins = max(1, round(len(items) * 10 / 60))
+        mins = max(1, round(len(items) * 10 / 60 / max(1, a.jobs)))
         print("Claude Code summarizes one paper at a time, so it is slower than the Batch API: "
               f"about 5-20 s a paper, roughly {mins} min for these. It counts against your Claude "
               "Code plan's usage. Safe to interrupt: finished summaries are kept.")
         if not a.yes and sys.stdin.isatty() and input("Go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
             return
-        written = derived.claude_code_summarize(lib, items, model=model)
+        written = derived.claude_code_summarize(lib, items, model=model, jobs=a.jobs)
     else:
         written = derived.api_submit(lib, items, model=model)
     _reindex(lib, written)

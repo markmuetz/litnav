@@ -112,3 +112,32 @@ def test_themes(ilib, monkeypatch):
     assert main(["-L", str(ilib.root), "themes", "--update", "--via", "claude-code"]) == 0
     assert "jones2019gravity" in seen["p"] and "smith2021cold" not in seen["p"].split("NEW PAPERS")[1]
     assert derived.themes_path(ilib).read_text() == "# Themes\n"
+
+
+def test_claude_code_parallel_and_stop(ilib, monkeypatch):
+    import threading
+    import time
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def fake(cmd, prompt, timeout=600):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        return {"structured_output": GOOD, "modelUsage": {"claude-haiku-5-5": {}}}
+    monkeypatch.setattr(derived, "run_claude", fake)
+    items = derived.select(ilib)
+    written = derived.claude_code_summarize(ilib, items, jobs=5, log=lambda *a: None)
+    assert sorted(written) == sorted(i.key for i in items) and peak[0] == len(items)
+
+    calls = []
+
+    def limit(cmd, prompt, timeout=600):
+        calls.append(1)
+        raise derived.Stop("usage limit reached")
+    monkeypatch.setattr(derived, "run_claude", limit)
+    logs = []
+    derived.claude_code_summarize(ilib, items, jobs=1, log=logs.append)
+    assert len(calls) == 1 and logs == ["stopping: usage limit reached"]

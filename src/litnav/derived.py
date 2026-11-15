@@ -289,29 +289,49 @@ def run_claude(cmd: list[str], prompt: str, timeout: int = 600) -> dict:
     return env
 
 
-def claude_code_summarize(lib, items, model=CLAUDE_CODE_SUMMARY_MODEL, log=print) -> list[str]:
+def claude_code_summarize(lib, items, model=CLAUDE_CODE_SUMMARY_MODEL, jobs: int = 1, log=print) -> list[str]:
+    """One `claude -p` per paper, `jobs` at a time. A failure that will repeat
+    (auth, usage limit) stops the whole run; finished summaries are kept."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
     outbound(lib, items)
-    written = []
-    for n, it in enumerate(items, 1):
+    written, stop, lock = [], threading.Event(), threading.Lock()
+    total = len(items)
+
+    def one(n_it):
+        n, it = n_it
+        if stop.is_set():
+            return
         outbound(lib, [it])          # sharing may change during a long run
         text, trunc = text_for(it)
         try:
             env = run_claude(claude_code_args(model, SCHEMA),
                              "Summarize the paper whose text follows.\n\n" + _prompt(it, text))
         except Stop as e:
-            log(f"stopping: {e}")
-            break
+            if not stop.is_set():
+                stop.set()
+                with lock:
+                    log(f"stopping: {e}")
+            return
         except RuntimeError as e:
-            log(f"[{n}/{len(items)}] {it.key}: failed ({e}); left for the next run")
-            continue
+            with lock:
+                log(f"[{n}/{total}] {it.key}: failed ({e}); left for the next run")
+            return
         d = env.get("structured_output")
         if not valid(d):
-            log(f"[{n}/{len(items)}] {it.key}: output did not match the schema; left for the next run")
-            continue
+            with lock:
+                log(f"[{n}/{total}] {it.key}: output did not match the schema; left for the next run")
+            return
         real = next(iter(env.get("modelUsage") or {}), model)
-        if write_summary(it, d, provenance(it, model=real, via="claude-code", text=text, truncated=trunc)):
-            written.append(it.key)
-        log(f"[{n}/{len(items)}] {it.key}: summarized")
+        changed = write_summary(it, d, provenance(it, model=real, via="claude-code", text=text,
+                                                  truncated=trunc))
+        with lock:
+            if changed:
+                written.append(it.key)
+            log(f"[{n}/{total}] {it.key}: summarized")
+
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+        list(ex.map(one, enumerate(items, 1)))
     return written
 
 
