@@ -222,6 +222,13 @@ through at least one back end.
 
 ### M7. Reading, recall, discovery, knowledge layer
 
+**Done 2026-11-16**, following an advisor review: `eval` first; one gate
+(`derived.outbound`) for all text bound for a model; batches submitted and
+collected on a later run, re-checking sharing; Claude Code runs with no
+transcripts or user settings; the to-fetch list is a TSV keyed on DOI with
+`skip` rows kept. Deferred: quizzes as a command, the legacy Markdown
+recall-queue import (done by a private script instead).
+
 - `reading.py`, `recall.py`: list with depths, done records, Leitner boxes
   with working days and the medium interval, `litnav due`, `read`, `recall
   rate <id> <rating>`, quizzes logged to `quizzes/`. Legacy Markdown queue
