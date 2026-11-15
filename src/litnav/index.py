@@ -66,7 +66,7 @@ def connect(lib, readonly: bool = False) -> sqlite3.Connection:
         con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, check_same_thread=False)
     else:
         p.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(p, check_same_thread=False)
+        con = sqlite3.connect(p, check_same_thread=False, timeout=60)
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
         con.execute("INSERT OR IGNORE INTO state VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
