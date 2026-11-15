@@ -781,7 +781,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'ask'", specifier = ">=0.40" },
     { name = "fastembed", marker = "extra == 'search'", specifier = ">=0.4" },
     { name = "litnav", extras = ["pdf", "search", "web", "mcp", "ask"], marker = "extra == 'all'" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3" },
     { name = "numpy", marker = "extra == 'search'", specifier = ">=1.26" },
     { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=4" },
     { name = "starlette", marker = "extra == 'web'", specifier = ">=0.37" },

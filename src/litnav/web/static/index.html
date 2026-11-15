@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>litnav</title>
+<link rel="stylesheet" href="/static/style.css">
+<meta name="litnav-token" content="__TOKEN__">
+</head>
+<body>
+<header>
+  <span class="brand">litnav</span>
+  <nav id="tabs">
+    <button data-view="library" class="on">Library</button>
+    <button data-view="search">Search</button>
+    <button data-view="paper">Paper</button>
+    <button data-view="graph">Graph</button>
+    <button data-view="tags">Tags</button>
+    <button data-view="reading">Reading</button>
+    <button data-view="ask">Ask</button>
+  </nav>
+  <span id="status" class="muted"></span>
+</header>
+
+<main>
+  <section id="view-library" class="view on">
+    <div class="bar">
+      <input id="lib-q" type="search" placeholder="Filter by title, author or key" autocomplete="off">
+      <select id="lib-tag"><option value="">All tags</option></select>
+      <select id="lib-project"><option value="">All projects</option></select>
+      <span id="lib-count" class="muted"></span>
+    </div>
+    <table class="items">
+      <thead><tr><th data-sort="key">Key</th><th data-sort="year">Year</th><th data-sort="first_author">Author</th><th data-sort="title">Title</th><th>Tags</th><th></th></tr></thead>
+      <tbody id="lib-rows"></tbody>
+    </table>
+  </section>
+
+  <section id="view-search" class="view">
+    <form id="search-form" class="bar">
+      <input id="search-q" type="search" placeholder='Search: words, and "exact phrases" (required)' autocomplete="off">
+      <select id="search-mode"><option value="hybrid">Hybrid</option><option value="keyword">Keyword</option><option value="semantic">Semantic</option></select>
+      <label><input type="checkbox" id="search-papers"> Papers</label>
+      <input id="search-year" placeholder="Year or 1990-2010" size="10">
+      <button type="submit">Search</button>
+    </form>
+    <p id="search-note" class="muted"></p>
+    <div id="search-results"></div>
+  </section>
+
+  <section id="view-paper" class="view">
+    <div id="paper"><p class="muted">Pick a paper from the library, search, graph or an answer.</p></div>
+  </section>
+
+  <section id="view-graph" class="view">
+    <div class="bar">
+      <input id="graph-q" type="search" placeholder="Highlight: key, author or title words" autocomplete="off">
+      <select id="graph-color"><option value="decade">Colour by decade</option><option value="tag">Colour by first tag</option></select>
+      <span id="graph-stats" class="muted"></span>
+    </div>
+    <div id="graph-wrap"><canvas id="graph-canvas"></canvas><div id="graph-tip"></div></div>
+  </section>
+
+  <section id="view-tags" class="view">
+    <h2>Tags</h2><div id="tag-cloud"></div>
+    <h2>Projects</h2><div id="project-list"></div>
+  </section>
+
+  <section id="view-reading" class="view">
+    <h2>Due today</h2><div id="due"></div>
+    <h2>Reading list</h2><div id="reading-list"></div>
+  </section>
+
+  <section id="view-ask" class="view">
+    <p id="ask-info" class="muted"></p>
+    <div id="ask-log"></div>
+    <form id="ask-form" class="bar">
+      <textarea id="ask-q" rows="3" placeholder="Ask a question about your library"></textarea>
+      <button type="submit">Ask</button>
+      <button type="button" id="ask-clear">New conversation</button>
+    </form>
+  </section>
+</main>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
