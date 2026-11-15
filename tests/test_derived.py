@@ -1,0 +1,96 @@
+import json
+from types import SimpleNamespace as NS
+
+import pytest
+
+from litnav import derived
+from litnav.net import Refused
+
+from test_search import ilib, FakeEmbedder  # noqa: F401
+
+GOOD = {"topic": "Cold pools.", "summary": "They spread.", "keywords": ["cold pools"]}
+
+
+def test_gate(ilib):
+    with pytest.raises(Refused):
+        derived.outbound(ilib, [ilib.get("doe2026plans_draft")])
+    derived.outbound(ilib, [ilib.get("smith2021cold"), ilib.get("jones2019gravity")])
+    keys = {it.key for it in derived.select(ilib)}
+    assert keys == {"smith2021cold", "jones2019gravity"}
+    with pytest.raises(Refused):
+        derived.select(ilib, keys=["doe2026plans_draft"])
+
+
+def test_gate_licensed_off(ilib):
+    p = ilib.root / "library.toml"
+    p.write_text(p.read_text().replace("licensed_to_models = true", "licensed_to_models = false"))
+    from litnav.library import Library
+    lib = Library(ilib.root)
+    assert {it.key for it in derived.select(lib)} == {"jones2019gravity"}
+    with pytest.raises(Refused, match="licensed_to_models"):
+        derived.outbound(lib, [lib.get("smith2021cold")])
+
+
+def test_write_stable(ilib):
+    it = ilib.get("smith2021cold")
+    text, trunc = derived.text_for(it)
+    prov = derived.provenance(it, model="m", via="api", text=text, truncated=trunc)
+    assert derived.write_summary(it, GOOD, prov)
+    assert not derived.write_summary(it, GOOD, prov)          # unchanged: no write
+    d = json.loads(it.summary_path.read_text())
+    assert d["provenance"]["text_sha256"] and "date" not in d["provenance"]
+    assert derived.is_current(it, "m") and not derived.is_current(it, "other")
+    assert "smith2021cold" not in {i.key for i in derived.select(ilib)}
+    it.text_path.write_text(it.text() + "\nMore text.\n")
+    assert "smith2021cold" in {i.key for i in derived.select(ilib, stale=True)}
+
+
+def test_claude_code_route(ilib, monkeypatch):
+    calls = []
+
+    def fake(cmd, prompt, timeout=600):
+        calls.append((cmd, prompt))
+        if "Gravity" in prompt or "gravity" in prompt.lower() and len(calls) == 1:
+            raise RuntimeError("boom")
+        return {"structured_output": GOOD, "modelUsage": {"claude-haiku-5-5": {}}}
+    monkeypatch.setattr(derived, "run_claude", fake)
+    items = derived.select(ilib)
+    written = derived.claude_code_summarize(ilib, items, log=lambda *a: None)
+    assert written
+    cmd = calls[0][0]
+    for flag in ("--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config",
+                 "--json-schema"):
+        assert flag in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert cmd[cmd.index("--setting-sources") + 1] == ""
+    s = ilib.get(written[0]).summary()
+    assert s["provenance"]["via"] == "claude-code" and s["provenance"]["model"] == "claude-haiku-5-5"
+
+
+def test_claude_code_stops_on_auth(ilib, monkeypatch):
+    def fake(cmd, prompt, timeout=600):
+        raise derived.Stop("Not logged in")
+    monkeypatch.setattr(derived, "run_claude", fake)
+    logs = []
+    assert derived.claude_code_summarize(ilib, derived.select(ilib), log=logs.append) == []
+    assert len(logs) == 1 and "stopping" in logs[0]
+
+
+def test_batch_collect_rechecks_sharing(ilib, monkeypatch):
+    it = ilib.get("smith2021cold")
+    from litnav.util import sha256_file
+    state = {"batch_id": "b1", "model": "claude-haiku-5-5", "items": {
+        "p00000": {"key": "smith2021cold", "sha": sha256_file(it.text_path), "chars": 10, "truncated": False},
+        "p00001": {"key": "jones2019gravity", "sha": "stale", "chars": 10, "truncated": False}}}
+    derived.state_path(ilib).parent.mkdir(parents=True, exist_ok=True)
+    derived.state_path(ilib).write_text(json.dumps(state))
+    msg = NS(stop_reason="end_turn", content=[NS(type="text", text=json.dumps(GOOD))])
+    results = [NS(custom_id=c, result=NS(type="succeeded", message=msg)) for c in state["items"]]
+    batches = NS(retrieve=lambda bid: NS(id=bid, processing_status="ended"),
+                 results=lambda bid: iter(results))
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", lambda: NS(messages=NS(batches=batches)))
+    it.set_sharing("confidential")
+    written, done = derived.api_collect(ilib, log=lambda *a: None)
+    assert done and written == []                   # confidential now; jones's text changed
+    assert not derived.state_path(ilib).exists()
