@@ -351,3 +351,19 @@ milestone text above where the two differ.
 3. ~~Summaries without an API key.~~ Answered 2026-11-15: yes, through
    Claude Code, defaulting to Haiku, with a warning that it is slower than
    the Batch API (design § 17). Built in M7.
+
+## Next (2026-11-15)
+
+1. Migrate the author's own reading data into their library (private script, not in this repo).
+2. Freeze the old litman data; the author moves to litnav this week.
+3. Fold new papers into the theme report (`themes --update`).
+4. Test a clean install from the git URL.
+5. CI on Python 3.11–3.13.
+6. Tag v0.1.0; draft the department announcement.
+7. Web app: outside candidates in the Graph view, a Discovery tab with the to-fetch list.
+8. `litnav quiz`: quiz logs per paper.
+9. `summarize --jobs N`: parallel Claude Code summaries.
+10. **Discuss** a paper instead of (or as well as) a quiz: the reader explains it
+    in their own words first; Claude probes, corrects from the paper's own
+    passages with chunk IDs, and logs what was solid and what was shaky.
+    Claude Code first (`/litnav:discuss <key>`), web app later.
