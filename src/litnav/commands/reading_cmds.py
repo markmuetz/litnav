@@ -1,4 +1,4 @@
-"""read (reading list), due, recall."""
+"""read (reading list), due, recall, quiz."""
 from __future__ import annotations
 
 from .. import reading
@@ -30,6 +30,19 @@ def add(sub):
     p.add_argument("id", help="paper key or concept:<slug>")
     p.add_argument("rating", choices=reading.RATINGS)
     p.set_defaults(func=cmd_recall)
+
+    p = sub.add_parser("quiz", help="quiz and discussion logs (quizzes/<key>.md)")
+    s = p.add_subparsers(dest="quiz_cmd", metavar="<action>")
+    q = s.add_parser("list", help="papers and concepts with logs (default)")
+    q.set_defaults(func=cmd_quiz_list)
+    q = s.add_parser("show", help="print a paper's log: read it before the next session")
+    q.add_argument("id", help="paper key or concept:<slug>")
+    q.set_defaults(func=cmd_quiz_show)
+    q = s.add_parser("start", help="add a dated section for a new session")
+    q.add_argument("id")
+    q.add_argument("--discuss", action="store_true", help="a discussion, not a quiz")
+    q.set_defaults(func=cmd_quiz_start)
+    p.set_defaults(func=cmd_quiz_list)
 
 
 def cmd_add(a):
@@ -71,3 +84,26 @@ def cmd_recall(a):
     lib = Library.find(a.library)
     c = reading.rate(lib, a.id, a.rating)
     print(f"{a.id}: box {c['box']}, next due {c['next_due']}")
+
+
+def cmd_quiz_list(a):
+    from .. import quizzes
+    lib = Library.find(a.library)
+    rows = quizzes.listing(lib)
+    for r in rows:
+        print(f"{r['id']:40s} {r['sessions']:2d} session(s), last {r['last']}")
+    if not rows:
+        print("No quiz or discussion logs yet.")
+
+
+def cmd_quiz_show(a):
+    from .. import quizzes
+    lib = Library.find(a.library)
+    p = quizzes.path(lib, a.id)
+    print(p.read_text("utf-8") if p.is_file() else f"No log yet for {a.id}.")
+
+
+def cmd_quiz_start(a):
+    from .. import quizzes
+    lib = Library.find(a.library)
+    print(quizzes.start(lib, a.id, "discussion" if a.discuss else "quiz"))

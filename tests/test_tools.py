@@ -98,3 +98,18 @@ def test_init_question(tmp_path):
     root = init(tmp_path / "l", git=False, licensed_to_models=False, log=lambda *a: None)
     assert Library(root).licensed_to_models is False
     assert Library(init(tmp_path / "m", git=False, log=lambda *a: None)).licensed_to_models is True
+
+
+def test_quiz_logs(lib):
+    import datetime as dt
+    from litnav import quizzes
+    lib.create_item("smith2021cold", None)
+    p = quizzes.start(lib, "smith2021cold", "quiz", today=dt.date(2026, 11, 16))
+    quizzes.start(lib, "smith2021cold", "discussion", today=dt.date(2026, 11, 20))
+    s = quizzes.sessions(lib, "smith2021cold")
+    assert [(x["date"], x["kind"]) for x in s] == [("2026-11-16", "quiz"), ("2026-11-20", "discussion")]
+    assert "| # | question" in s[0]["body"] and "Shaky" in s[1]["body"]
+    quizzes.start(lib, "concept:cre", "quiz")
+    ids = {r["id"]: r for r in quizzes.listing(lib)}
+    assert ids["smith2021cold"]["sessions"] == 2 and ids["smith2021cold"]["last"] == "2026-11-20"
+    assert "concept:cre" in ids and p.endswith("smith2021cold.md")
