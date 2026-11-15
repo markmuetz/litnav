@@ -129,9 +129,9 @@ def part_number(title: str) -> int | None:
 def surname(author_field: str) -> str:
     """First author's surname from a BibTeX author field."""
     first = re.split(r"\s+and\s+", author_field.strip(), maxsplit=1)[0].strip()
-    first = first.strip("{}")
     if "," in first:
-        return first.split(",", 1)[0].strip()
+        return first.split(",", 1)[0].strip().strip("{}").strip()
+    first = first.strip("{}")
     parts = first.split()
     return parts[-1] if parts else ""
 

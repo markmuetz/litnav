@@ -33,7 +33,9 @@ litnav = "litnav.cli:main"
 Homepage = "https://github.com/markmuetz/litnav"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/litnav"]
