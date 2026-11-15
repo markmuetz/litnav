@@ -23,6 +23,7 @@ def add(sub):
     p.add_argument("--dry-run", "-n", action="store_true", help="list what would be summarized")
     p.add_argument("--yes", "-y", action="store_true", help="don't ask before a long claude-code run")
     p.set_defaults(func=cmd_summarize)
+    add_themes(sub)
 
 
 def _via(a):
@@ -83,3 +84,47 @@ def _reindex(lib, written):
             con.close()
         msg += " and embedded"
     print(msg)
+
+
+def add_themes(sub):
+    p = sub.add_parser("themes", help="theme report across all summaries (derived/themes.md)")
+    p.add_argument("--update", "-u", action="store_true",
+                   help="fold in only papers the report doesn't cite; existing themes stay as they are")
+    p.add_argument("--tag", "-t")
+    p.add_argument("--via", choices=["api", "claude-code"])
+    p.add_argument("--model")
+    p.add_argument("--dry-run", "-n", action="store_true", help="say what would be sent, then stop")
+    p.set_defaults(func=cmd_themes)
+
+
+def cmd_themes(a):
+    from ..util import atomic_write
+    lib = Library.find(a.library)
+    out = derived.themes_path(lib)
+    summaries = derived.theme_inputs(lib, a.tag)
+    if not summaries:
+        print("No summaries to work from: run `litnav summarize` first.")
+        return
+    report = None
+    if a.update and out.is_file():
+        report = out.read_text("utf-8")
+        # "Uncited" is not "new": a full run leaves some papers out, and those come back here.
+        cited = derived.keys_in_report(report)
+        summaries = [(k, s) for k, s in summaries if k not in cited]
+        if not summaries:
+            print(f"{out} already cites every summarized paper.")
+            return
+        print(f"updating {out} with {len(summaries)} uncited paper(s)")
+    else:
+        print(f"deriving themes from {len(summaries)} summaries")
+    prompt = derived.themes_prompt(summaries, report)
+    via = _via(a)
+    model = a.model or (derived.THEMES_MODEL if via == "api" else derived.CLAUDE_CODE_THEMES_MODEL)
+    print(f"{len(prompt):,} characters to {model} via {via}")
+    if a.dry_run:
+        return
+    text = derived.themes_api(prompt, model) if via == "api" else derived.themes_claude_code(prompt, model)
+    if not text.strip():
+        raise ValueError("the model returned nothing; the report was not changed")
+    atomic_write(out, text.rstrip() + "\n")
+    print(f"wrote {out}")

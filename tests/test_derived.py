@@ -94,3 +94,21 @@ def test_batch_collect_rechecks_sharing(ilib, monkeypatch):
     written, done = derived.api_collect(ilib, log=lambda *a: None)
     assert done and written == []                   # confidential now; jones's text changed
     assert not derived.state_path(ilib).exists()
+
+
+def test_themes(ilib, monkeypatch):
+    for k in ("smith2021cold", "jones2019gravity", "doe2026plans_draft"):
+        ilib.get(k).summary_path.write_text(json.dumps(GOOD))
+    keys = [k for k, _ in derived.theme_inputs(ilib)]
+    assert sorted(keys) == ["jones2019gravity", "smith2021cold"]       # never the confidential one
+    assert derived.keys_in_report("1. X: `a2020b`, [c2021d], [@e2022f]") == {"a2020b", "c2021d", "e2022f"}
+    p = derived.themes_prompt(derived.theme_inputs(ilib), "REPORT [@smith2021cold]")
+    assert "EXISTING REPORT" in p and "Keep existing themes verbatim" in p
+    seen = {}
+    monkeypatch.setattr(derived, "themes_claude_code", lambda prompt, model: seen.setdefault("p", prompt) and "# Themes\n")
+    derived.themes_path(ilib).parent.mkdir(exist_ok=True)
+    derived.themes_path(ilib).write_text("1. Cold pools: [@smith2021cold]\n")
+    from litnav.cli import main
+    assert main(["-L", str(ilib.root), "themes", "--update", "--via", "claude-code"]) == 0
+    assert "jones2019gravity" in seen["p"] and "smith2021cold" not in seen["p"].split("NEW PAPERS")[1]
+    assert derived.themes_path(ilib).read_text() == "# Themes\n"

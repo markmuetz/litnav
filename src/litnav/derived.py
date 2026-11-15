@@ -313,3 +313,82 @@ def claude_code_summarize(lib, items, model=CLAUDE_CODE_SUMMARY_MODEL, log=print
             written.append(it.key)
         log(f"[{n}/{len(items)}] {it.key}: summarized")
     return written
+
+
+# ---- themes (reduce step: one call over every summary)
+
+THEMES_EFFORT = "high"
+THEMES_MAX_TOKENS = 64000
+CLAUDE_CODE_THEMES_MODEL = "opus"
+
+# Keys as they appear in a report: `key` (what models emit), [key] or [@key].
+_REPORT_KEY = re.compile(r"`([A-Za-z][\w.:-]*)`|\[@?([A-Za-z][\w.:-]*)\]")
+
+
+def themes_path(lib):
+    return lib.root / "derived" / "themes.md"
+
+
+def keys_in_report(report: str) -> set[str]:
+    return {a or b for a, b in _REPORT_KEY.findall(report)}
+
+
+def theme_inputs(lib, tag=None) -> list[tuple[str, dict]]:
+    """(key, summary) for papers whose summary may go to a model *now*: a
+    summary written before a sharing change is filtered by today's level."""
+    out = []
+    for it in lib.items(purpose=S.SEND_OUT, tag=tag):
+        s = it.summary()
+        if s:
+            out.append((it.key, s))
+    return out
+
+
+def _lines(summaries) -> str:
+    return "\n".join(f"- [@{k}] {s.get('topic', '')} | keywords: {', '.join(s.get('keywords', []))}"
+                     for k, s in summaries)
+
+
+def themes_prompt(summaries, report: str | None = None) -> str:
+    if report is None:
+        return ("Below is a list of papers from a personal literature library, one per line, each "
+                "with a one-line topic and keywords. Identify the major recurring themes across the "
+                "collection. For each theme: a short numbered title, a one-sentence description, "
+                "and the paper keys that belong to it, written as [@key]. A paper may appear under "
+                "more than one theme. End with a short note on the overall shape of the "
+                f"collection. Use Markdown.\n\nPapers ({len(summaries)}):\n{_lines(summaries)}")
+    return ("Below is an existing theme report for a personal literature library, followed by "
+            "papers added since it was written. Update the report to cover them.\n\nRules:\n"
+            "- Return the COMPLETE updated report, not a diff or a summary of changes.\n"
+            "- Keep existing themes verbatim: same numbering, titles, descriptions and wording. "
+            "The only edit to an existing theme is appending new paper keys to its list.\n"
+            "- Add each new paper to whichever existing themes fit. A paper may appear under "
+            "more than one theme; one that fits nothing may be left out.\n"
+            "- Create a new theme only if several new papers share a subject no theme covers. "
+            "Append new themes at the end, continuing the numbering.\n"
+            "- Write keys as [@key].\n"
+            "- Leave the closing note unchanged unless the new papers change the picture.\n\n"
+            f"EXISTING REPORT:\n{report}\n\nNEW PAPERS ({len(summaries)}):\n{_lines(summaries)}")
+
+
+def themes_api(prompt: str, model=THEMES_MODEL, log=print) -> str:
+    import anthropic
+    client = anthropic.Anthropic()
+    parts = []
+    with client.messages.stream(model=model, max_tokens=THEMES_MAX_TOKENS,
+                                thinking={"type": "adaptive"},
+                                output_config={"effort": THEMES_EFFORT},
+                                messages=[{"role": "user", "content": prompt}]) as stream:
+        for t in stream.text_stream:
+            parts.append(t)
+        final = stream.get_final_message()
+    if final.stop_reason == "max_tokens":
+        log(f"warning: the report was cut off at max_tokens={THEMES_MAX_TOKENS}")
+    return "".join(parts)
+
+
+def themes_claude_code(prompt: str, model=CLAUDE_CODE_THEMES_MODEL) -> str:
+    env = run_claude(claude_code_args(model, system="You write theme reports for a personal "
+                                      "literature library. Reply with the report only."),
+                     prompt, timeout=1800)
+    return str(env.get("result", ""))
