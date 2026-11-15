@@ -47,13 +47,14 @@ def build(lib, client, *, min_cites: int = 3, log=print) -> dict:
         if changed:
             it.save_meta()
     id2key = {short(w["id"]): k for k, w in works.items()}
-    edges, outside = set(), Counter()
+    edges, outside, citers = set(), Counter(), {}
     for k, rs in refs_of.items():
-        for r in rs:
+        for r in dict.fromkeys(rs):
             if r in id2key and id2key[r] != k:
                 edges.add((k, id2key[r]))
             elif r not in id2key:
                 outside[r] += 1
+                citers.setdefault(r, []).append(k)
     cand_ids = [r for r, c in outside.most_common() if c >= min_cites]
     cands = []
     for w in openalex.by_ids(client, cand_ids):
@@ -61,7 +62,8 @@ def build(lib, client, *, min_cites: int = 3, log=print) -> dict:
         au = (w.get("authorships") or [{}])[0].get("author", {}).get("display_name", "")
         cands.append({"id": wid, "title": w.get("title") or "", "year": w.get("publication_year"),
                       "first_author": au, "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
-                      "cited_by_library": outside[wid], "cited_by_count": w.get("cited_by_count")})
+                      "cited_by_library": outside[wid], "cited_by_count": w.get("cited_by_count"),
+                      "citers": sorted(citers.get(wid, []))})
     cands.sort(key=lambda c: -c["cited_by_library"])
     with index.writer(lib) as con:
         con.execute("DELETE FROM edges")

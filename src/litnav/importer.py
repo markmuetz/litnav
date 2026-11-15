@@ -211,6 +211,10 @@ def apply(lib, rows, *, tags=(), mode: str | None = None, log=print) -> dict:
             log(f"  held already as {r['dup_of']}: file kept as _variants/{dest.name}")
         else:
             counts["left"] += 1
+    if counts["imported"]:
+        from . import discovery
+        for r in discovery.prune(lib):
+            log(f"to-fetch: {r['doi']} is now in the library; row removed")
     return counts
 
 
