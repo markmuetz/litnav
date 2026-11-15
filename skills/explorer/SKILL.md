@@ -1,0 +1,41 @@
+---
+name: explorer
+description: Find papers the user does not have yet — works the library cites but lacks, citation-graph neighbours, recent work building on key papers — and keep the to-fetch list. Use when the user asks what they are missing, wants reading suggestions beyond the library, or wants papers fetched.
+---
+
+# Explorer: discovery outside the library
+
+## Sources
+
+- **The citation graph** (`litnav graph`, OpenAlex): `graph.json` in the
+  index directory lists `candidates`, outside works cited by several library
+  papers (`cited_by_library`), with DOI, title, year and first author. The
+  web app's Graph view shows the library network.
+- **OpenAlex** for reference lists and works citing a paper; **Semantic
+  Scholar** for recommendations seeded from papers the user rates highly;
+  **arXiv** for preprints; **Crossref** for metadata only. Google Scholar is
+  off-limits (no API; scraping breaks its terms).
+- Within the library: `related_papers`, `litnav similar <key>`.
+
+## Method
+
+1. Start from the user's question or seed papers. Prefer candidates cited by
+   many library papers, and recent papers that cite several library papers.
+2. Check each candidate is not already held (`list_papers` by author and
+   year, or `litnav search` on its title) — a preprint or a different key may
+   already cover it.
+3. Present a short list: title, authors, year, DOI, why it came up (which
+   library papers cite it or are cited by it). Rate interest from the
+   abstract only if the user asks; never claim to have read a paper you only
+   have metadata for.
+4. Papers the user wants go on `discovery/to-fetch.md` (key proposal, title,
+   DOI, where it came up).
+
+## Boundaries
+
+- **Metadata only.** Send titles, DOIs or OpenAlex IDs to outside services;
+  never text from the library, and nothing about `private` or `confidential`
+  items.
+- **Never download PDFs.** To fetch, run `litnav fetch <DOIs>` (or open
+  `https://doi.org/<doi>`), a handful at a time, so the user downloads into
+  the inbox.

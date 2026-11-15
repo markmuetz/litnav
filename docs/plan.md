@@ -47,7 +47,7 @@ src/litnav/
   importers/bibtex.py    import from a .bib with file fields (Zotero, JabRef)
   importers/legacy.py    convert a litman data directory
   extract.py             PDF → text, OCR fallback
-  sections.py            heading detection → text.md
+  sections.py            heading detection (at index time)
   chunks.py              section-aware chunks with stable IDs
   index.py               SQLite schema, incremental build, FTS5
   embed.py               fastembed wrapper, vectors file
@@ -143,8 +143,8 @@ with nothing silently dropped (a count table at the end).
   Introduction, Data, Methods, Results, Discussion, Conclusion(s), Summary,
   Acknowledg(e)ments, References, Appendix), guards against false positives
   (figure/table captions, equation numbers, page headers repeated on every
-  page). Writes `text.md` with `#`/`##` headings and a front matter block
-  (`sections_detected: true|false`).
+  page). Runs at index time on `text.txt` (changed in build: the tracked
+  file stays as extracted); `sections_detected` is stored in the index.
 - `chunks.py`: § 9 rules; fallback to fixed passages; IDs
   `<key>#<section>#c<n>`; abstract and caption chunks.
 - `index.py`: schema (items, authors, tags, relations, sections, chunks,
@@ -264,7 +264,7 @@ milestone text above where the two differ.
 **Data and IDs**
 - Chunk IDs are `<key>#<section-slug>#<hash8>`, the hash over the chunk's
   normalised text, so a re-chunk keeps IDs for unchanged text. Keys resolve
-  through aliases. Every piece of evidence stores its quote and `text.md`
+  through aliases. Every piece of evidence stores its quote and `text.txt`
   offsets as well, so a dead ID can be re-found by quote. The index records a
   chunker version.
 - Vectors are BLOBs in SQLite keyed by a hash of (model, header + text):
@@ -275,7 +275,7 @@ milestone text above where the two differ.
 - The index location is configurable (`index_dir`); `init` puts it in the
   user cache directory when the library sits in a synced folder (Dropbox,
   OneDrive, iCloud), which corrupts SQLite.
-- `track_text = false` keeps `text.md` locally, gitignored.
+- `track_text = false` keeps `text.txt` locally, gitignored.
 
 **Sharing**
 - Each chunk row carries its item's sharing level; every search and fetch

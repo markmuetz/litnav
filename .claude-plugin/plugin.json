@@ -1,0 +1,10 @@
+{
+  "name": "litnav",
+  "version": "0.1.0",
+  "description": "A local literature library for researchers and their agents: search with evidence, reading and recall, curation and discovery.",
+  "author": { "name": "Mark Muetzelfeldt" },
+  "homepage": "https://github.com/markmuetz/litnav",
+  "repository": "https://github.com/markmuetz/litnav",
+  "license": "MIT",
+  "keywords": ["literature", "papers", "bibtex", "research", "search"]
+}

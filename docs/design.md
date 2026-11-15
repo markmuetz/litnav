@@ -61,7 +61,7 @@ over as tests (§ 14); the code is not.
   papers/<key>/               one directory per item, flat
     ref.bib                   the bibliographic record, in house style (§ 8)
     meta.toml                 litnav's own fields: ids, tags, relations, sharing
-    text.md                   extracted text with section headings (derived, tracked)
+    text.txt                  extracted text, as extracted (tracked); sections are found at index time
     summary.json              generated summary, with provenance (tracked)
   notes/<key>.md              the user's notes on a paper
   concepts/<slug>.md          concept notes
@@ -76,7 +76,7 @@ over as tests (§ 14); the code is not.
   .litnav/                   index.sqlite, vectors, caches (gitignored)
 ```
 
-**The library repo must stay private** if it tracks `text.md` (extracted text
+**The library repo must stay private** if it tracks `text.txt` (extracted text
 of licensed papers is redistribution if pushed somewhere public). `init` writes
 this into the library's README, and `library.toml` can turn off tracking of
 text (`track_text = false`) for users who want to publish their repo.
@@ -139,6 +139,9 @@ corrigendum_of = ""
 pdf = true                      # false for physical copies
 text_source = "pdftotext"       # or "ocr:tesseract", "ocr:vision", "grobid"
 pdf_sha256 = "..."
+pdf_path = "IPCC/ipcc2021wg1ch01.pdf"   # optional, relative to pdf_dir, for a PDF kept
+                                        # outside the flat store
+licence = "cc-by"               # from OpenAlex, when it reports an open licence
 ```
 
 Every field is optional; an item with only a `ref.bib` is valid.
@@ -253,7 +256,10 @@ convention).
 
 ## 9. Text, structure and chunks
 
-**Extraction** keeps section structure in `text.md`, as Markdown headings:
+**Extraction** writes the raw text to `text.txt`; section structure is
+detected at index time (`sections.py`, versioned) and stored in the index, so
+improving the detector never rewrites tracked files. A hand-sectioned
+`text.txt` (Markdown headings, `sections = "manual"` in meta.toml) is used as is:
 
 1. Born-digital PDF: the text layer (pdftotext or pypdfium2; **not PyMuPDF**,
    which is AGPL and would bind the project's licence).
@@ -438,7 +444,7 @@ Each is a test in the new repo before the code that satisfies it:
 `litnav import-legacy <old-data-dir> --pdf-dir <dir>`, dry run first:
 
 - `ref.bib` kept (re-normalised); `tags.txt` → `meta.toml`; `summary.json` kept
-- `extracted_text.txt` → `text.md`, re-sectioned; OCR'd text kept (no re-OCR)
+- `extracted_text.txt` → `text.txt`; OCR'd text kept (no re-OCR)
 - preprint and draft spreadsheets → `relations`; draft items `confidential`
 - PDF symlinks dropped: `pdf_dir` points at the existing flat store, already
   named `<key>.pdf`

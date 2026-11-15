@@ -1,0 +1,11 @@
+{
+  "name": "litnav",
+  "owner": { "name": "Mark Muetzelfeldt" },
+  "plugins": [
+    {
+      "name": "litnav",
+      "source": "./",
+      "description": "A local literature library for researchers and their agents."
+    }
+  ]
+}
