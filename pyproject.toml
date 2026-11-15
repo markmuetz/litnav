@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "litnav"
+version = "0.0.1"
+description = "A local, file-based literature library for researchers and their agents."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mark Muetzelfeldt" }]
+requires-python = ">=3.11"
+dependencies = ["tomli-w>=1.0"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+pdf = ["pypdfium2>=4"]
+search = ["fastembed>=0.4", "numpy>=1.26"]
+web = ["starlette>=0.37", "uvicorn>=0.30"]
+mcp = ["mcp>=1.2"]
+ask = ["anthropic>=0.40"]
+all = ["litnav[pdf,search,web,mcp,ask]"]
+
+[project.scripts]
+litnav = "litnav.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/markmuetz/litnav"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/litnav"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
