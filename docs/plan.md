@@ -222,7 +222,7 @@ through at least one back end.
 
 ### M7. Reading, recall, discovery, knowledge layer
 
-**Done 2026-11-16**, following an advisor review: `eval` first; one gate
+**Done 2026-11-15**, following an advisor review: `eval` first; one gate
 (`derived.outbound`) for all text bound for a model; batches submitted and
 collected on a later run, re-checking sharing; Claude Code runs with no
 transcripts or user settings; the to-fetch list is a TSV keyed on DOI with
