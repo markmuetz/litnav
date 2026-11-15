@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "litnav"
-version = "0.0.1"
+version = "0.1.0"
 description = "A local, file-based literature library for researchers and their agents."
 readme = "README.md"
 license = "MIT"
