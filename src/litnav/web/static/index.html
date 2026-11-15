@@ -17,6 +17,7 @@
     <button data-view="graph">Graph</button>
     <button data-view="tags">Tags</button>
     <button data-view="reading">Reading</button>
+    <button data-view="discovery">Discovery</button>
     <button data-view="ask">Ask</button>
   </nav>
   <span id="status" class="muted"></span>
@@ -56,6 +57,7 @@
     <div class="bar">
       <input id="graph-q" type="search" placeholder="Highlight: key, author or title words" autocomplete="off">
       <select id="graph-color"><option value="decade">Colour by decade</option><option value="tag">Colour by first tag</option></select>
+      <label title="Outside papers your library cites, drawn as rings"><input type="checkbox" id="graph-cands"> Outside papers cited by ≥ <input id="graph-mincites" type="number" value="10" min="2" style="width:4em"></label>
       <span id="graph-stats" class="muted"></span>
     </div>
     <div id="graph-wrap"><canvas id="graph-canvas"></canvas><div id="graph-tip"></div></div>
@@ -69,6 +71,16 @@
   <section id="view-reading" class="view">
     <h2>Due today</h2><div id="due"></div>
     <h2>Reading list</h2><div id="reading-list"></div>
+  </section>
+
+  <section id="view-discovery" class="view">
+    <h2>To fetch</h2>
+    <p class="muted">Open a DOI, save the PDF into the inbox, then run <code>litnav import</code>. Imported papers drop off this list.</p>
+    <div id="tofetch"></div>
+    <h2>Candidates</h2>
+    <div class="bar"><label>Cited by at least <input id="cand-min" type="number" value="5" min="2" style="width:4em"> of your papers</label>
+      <span id="cand-count" class="muted"></span></div>
+    <div id="cands"></div>
   </section>
 
   <section id="view-ask" class="view">

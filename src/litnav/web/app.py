@@ -203,6 +203,33 @@ def create_app(lib: Library, port: int, token: str | None = None):
             x["title"] = titles.get(x["key"], "")
         return JSONResponse({"list": lst, "due": due, "cards": cards})
 
+    async def candidates(request):
+        from .. import discovery
+        q = request.query_params
+        cs = discovery.candidates(lib, min_cites=int(q.get("min_cites", 5)))[:min(int(q.get("limit", 150)), 500)]
+        return JSONResponse(cs)
+
+    async def get_tofetch(request):
+        from .. import discovery
+        return JSONResponse(discovery.load(lib))
+
+    async def post_tofetch(request):
+        from .. import discovery
+        b = await request.json()
+        act, doi = b.get("action"), b.get("doi", "")
+        if act in ("add", "add_skip"):
+            row = {k: str(b.get(k) or "") for k in ("doi", "title", "first_author", "year", "source", "note")}
+            if act == "add_skip":
+                row["status"] = "skip"
+            discovery.add(lib, [row])
+            msg = f"To fetch: {'skip' if act == 'add_skip' else 'add'} {doi or row['title'][:40]}."
+        elif act in ("skip", "opened"):
+            discovery.set_status(lib, [doi], act)
+            msg = f"To fetch: {act} {doi}."
+        else:
+            return JSONResponse({"error": "unknown action"}, 400)
+        return JSONResponse({"ok": True, "git": git.commit([discovery.tofetch_path(lib)], msg)})
+
     async def pdf(request):
         key = lib.resolve(request.path_params["key"])
         if not key:
@@ -294,6 +321,9 @@ def create_app(lib: Library, port: int, token: str | None = None):
         Route("/api/bib", bibtex),
         Route("/api/ask", ask, methods=["POST"]),
         Route("/api/ask", ask_info),
+        Route("/api/candidates", candidates),
+        Route("/api/to-fetch", get_tofetch),
+        Route("/api/to-fetch", post_tofetch, methods=["POST"]),
         Route("/pdf/{key}", pdf),
         Mount("/static", StaticFiles(directory=STATIC)),
     ]

@@ -77,6 +77,7 @@ function show(view) {
   if (view === "graph") graph.activate();
   if (view === "reading") loadReading();
   if (view === "tags") loadTags();
+  if (view === "discovery") loadDiscovery();
   history.replaceState(null, "", `#${view}`);
 }
 document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => show(b.dataset.view)));
@@ -286,6 +287,42 @@ $("#ask-q").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.met
 const graph = new Graph($("#graph-canvas"), $("#graph-tip"), $("#graph-stats"), openPaper, api);
 $("#graph-q").addEventListener("input", (e) => graph.highlight(e.target.value));
 $("#graph-color").addEventListener("change", (e) => graph.colorBy(e.target.value));
+const candToggle = () => graph.showCandidates($("#graph-cands").checked, +$("#graph-mincites").value);
+$("#graph-cands").addEventListener("change", candToggle);
+$("#graph-mincites").addEventListener("change", () => { if ($("#graph-cands").checked) candToggle(); });
+
+// ---- discovery ----
+async function tofetch(action, row) {
+  const r = await post("/api/to-fetch", { action, ...row });
+  status(r.git);
+  loadDiscovery();
+}
+async function loadDiscovery() {
+  const rows = await api("/api/to-fetch");
+  const live = rows.filter((r) => r.status !== "skip");
+  $("#tofetch").replaceChildren(...(live.length ? [el("table", { class: "items" }, el("tbody", {}, ...live.map((r) => el("tr", {},
+    el("td", {}, r.first_author || "", " ", r.year || ""),
+    el("td", {}, r.title || "", r.note ? el("div", { class: "muted" }, r.note) : ""),
+    el("td", {}, r.doi ? el("a", { href: `https://doi.org/${r.doi}`, target: "_blank", rel: "noopener",
+                                   onclick: () => r.status || tofetch("opened", { doi: r.doi }) }, r.status === "opened" ? "opened" : "Open") : "",
+                 " ", el("button", { onclick: () => tofetch("skip", { doi: r.doi }) }, "Skip"))))))]
+    : [el("p", { class: "muted" }, "Nothing on the list.")]));
+  const min = +$("#cand-min").value || 5;
+  let cs;
+  try { cs = await api(`/api/candidates?min_cites=${min}&limit=150`); }
+  catch (err) { $("#cands").replaceChildren(el("p", { class: "muted" }, String(err))); return; }
+  $("#cand-count").textContent = `${cs.length} shown`;
+  $("#cands").replaceChildren(...cs.map((c) => el("div", { class: "result" },
+    el("div", { class: "head" }, `${c.first_author || ""} ${c.year || ""}: `, c.title || ""),
+    el("div", { class: "sec" }, `cited by ${c.cited_by_library} of your papers: `,
+      ...(c.citers || []).slice(0, 8).flatMap((k) => [keyLink(k), " "]), (c.citers || []).length > 8 ? "…" : ""),
+    c.maybe_held ? el("div", { class: "sec" }, "Maybe already held as ", keyLink(c.maybe_held)) : "",
+    el("div", {}, c.doi ? el("a", { href: `https://doi.org/${c.doi}`, target: "_blank", rel: "noopener" }, c.doi) : "(no DOI)", " ",
+      c.listed ? el("span", { class: "muted" }, `[${c.listed}]`)
+        : el("button", { onclick: () => tofetch("add", { doi: c.doi, title: c.title, first_author: c.first_author, year: c.year, source: `candidates:${c.cited_by_library}` }) }, "Want"),
+      " ", c.listed === "skip" ? "" : el("button", { onclick: () => tofetch(c.listed ? "skip" : "add_skip", { doi: c.doi, title: c.title, first_author: c.first_author, year: c.year, source: `candidates:${c.cited_by_library}` }) }, "Not interested")))));
+}
+$("#cand-min").addEventListener("change", loadDiscovery);
 
 // ---- start ----
 (async () => {
@@ -297,6 +334,8 @@ $("#graph-color").addEventListener("change", (e) => graph.colorBy(e.target.value
     await loadLibrary();
     askInfo();
     const v = decodeURIComponent(location.hash.slice(1));
+    const qp = new URLSearchParams(location.search);
+    if (qp.get("cands")) { $("#graph-cands").checked = true; $("#graph-mincites").value = qp.get("cands"); candToggle(); }
     if (v.startsWith("paper/")) openPaper(v.slice(6));
     else if (v && document.getElementById(`view-${v}`)) show(v);
   } catch (err) { status(String(err)); }

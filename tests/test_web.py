@@ -60,3 +60,19 @@ def test_writes(client, ilib):
     d = client.get("/api/reading").json()
     assert d["list"][0]["status"] == "done" and d["cards"][0]["id"] == "smith2021cold"
     assert post(client, "/api/reading", {"action": "add", "key": "smith2021cold", "depth": "nope"}).status_code == 400
+
+
+def test_discovery_endpoints(client, ilib):
+    import json as J
+    ilib.index_dir.mkdir(parents=True, exist_ok=True)
+    (ilib.index_dir / "graph.json").write_text(J.dumps({"nodes": [], "links": [], "candidates": [
+        {"id": "W2", "doi": "10.1/new", "title": "Gravity waves aloft", "year": 2000, "first_author": "A Lee",
+         "cited_by_library": 6, "citers": ["smith2021cold"]}]}))
+    cs = client.get("/api/candidates", params={"min_cites": 5}).json()
+    assert [c["id"] for c in cs] == ["W2"]
+    assert post(client, "/api/to-fetch", {"action": "add", "doi": "10.1/new", "title": "Gravity waves aloft"}).json()["ok"]
+    assert client.get("/api/candidates").json()[0]["listed"] == "listed"
+    assert post(client, "/api/to-fetch", {"action": "opened", "doi": "10.1/new"}).json()["ok"]
+    assert client.get("/api/to-fetch").json()[0]["status"] == "opened"
+    assert post(client, "/api/to-fetch", {"action": "add_skip", "doi": "10.1/other", "title": "x"}).json()["ok"]
+    assert post(client, "/api/to-fetch", {"action": "bogus"}).status_code == 400

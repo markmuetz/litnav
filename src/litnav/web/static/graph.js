@@ -18,23 +18,53 @@ export class Graph {
   async activate() {
     if (this.loaded) { this.resize(); return; }
     this.loaded = true;
-    const d = await this.api("/api/graph");
-    if (!d.nodes.length) { this.stats.textContent = "No graph yet: run `litnav graph`."; return; }
-    const idx = new Map(d.nodes.map((n, i) => [n.key, i]));
-    this.nodes = d.nodes;
-    this.edges = d.links.map((l) => [idx.get(l.source), idx.get(l.target)]).filter(([a, b]) => a !== undefined && b !== undefined);
-    const N = this.N = this.nodes.length;
+    this.data = await this.api("/api/graph");
+    if (!this.data.nodes.length) { this.stats.textContent = "No graph yet: run `litnav graph`."; return; }
+    this.build();
+  }
+
+  // Outside candidates (works the library cites but lacks) as hollow rings,
+  // linked to the library papers that cite them.
+  showCandidates(on, minCites) {
+    this.cands = on ? Math.max(1, minCites || 10) : 0;
+    if (this.data) this.build();
+  }
+
+  build() {
+    const d = this.data, old = new Map((this.nodes || []).map((n, i) => [n.key, [this.px[i], this.py[i]]]));
+    const nodes = d.nodes.slice();
+    const idx = new Map(nodes.map((n, i) => [n.key, i]));
+    const edges = d.links.map((l) => [idx.get(l.source), idx.get(l.target)]).filter(([a, b]) => a !== undefined && b !== undefined);
+    let nc = 0;
+    if (this.cands) {
+      for (const c of d.candidates.filter((c) => c.cited_by_library >= this.cands).slice(0, 1500)) {
+        idx.set(c.id, nodes.length);
+        nodes.push({ key: c.id, cand: true, title: c.title, year: c.year, first_author: c.first_author, doi: c.doi,
+                     in: c.cited_by_library, out: 0 });
+        for (const k of c.citers || []) if (idx.has(k)) edges.push([idx.get(k), nodes.length - 1]);
+        nc++;
+      }
+    }
+    this.nodes = nodes; this.edges = edges;
+    const N = this.N = nodes.length;
     this.deg = new Float32Array(N);
-    for (const [a, b] of this.edges) { this.deg[a]++; this.deg[b]++; }
-    this.springK = Float32Array.from(this.edges, ([a, b]) => SPRING_K * Math.min(1, 12 / Math.max(1, Math.min(this.deg[a], this.deg[b]))));
-    this.r = Float32Array.from(this.nodes, (n) => 2.5 + Math.sqrt(n.in || 0) * 1.6);
+    for (const [a, b] of edges) { this.deg[a]++; this.deg[b]++; }
+    this.springK = Float32Array.from(edges, ([a, b]) => SPRING_K * Math.min(1, 12 / Math.max(1, Math.min(this.deg[a], this.deg[b]))));
+    this.r = Float32Array.from(nodes, (n) => 2.5 + Math.sqrt(n.in || 0) * 1.6);
     this.px = new Float32Array(N); this.py = new Float32Array(N);
     this.vx = new Float32Array(N); this.vy = new Float32Array(N);
     const R = 30 * Math.sqrt(N);
-    for (let i = 0; i < N; i++) { const a = Math.random() * 2 * Math.PI, r = R * Math.sqrt(Math.random()); this.px[i] = Math.cos(a) * r; this.py[i] = Math.sin(a) * r; }
-    this.alpha = 1;
+    for (let i = 0; i < N; i++) {
+      const p = old.get(nodes[i].key);
+      if (p) { [this.px[i], this.py[i]] = p; continue; }
+      const a = Math.random() * 2 * Math.PI, r = R * Math.sqrt(Math.random());
+      this.px[i] = Math.cos(a) * r; this.py[i] = Math.sin(a) * r;
+    }
+    this.alpha = old.size ? 0.5 : 1;
+    this.hover = -1;
     this.colorBy(this.mode);
-    this.stats.textContent = `${N} papers, ${this.edges.length} citations within the library, ${d.candidates.length} outside works cited by several`;
+    this.stats.textContent = `${d.nodes.length} papers, ${d.links.length} citations within the library` +
+      (nc ? `, ${nc} outside papers (rings)` : `, ${d.candidates.length} outside works cited by several`);
     this.resize();
     this.run();
   }
@@ -163,8 +193,10 @@ export class Graph {
     const dim = (i) => (hover >= 0 && !nbr.has(i) && i !== hover) || (match && !match[i]);
     for (let i = 0; i < this.N; i++) {
       ctx.globalAlpha = dim(i) ? 0.15 : 1;
+      ctx.beginPath(); ctx.arc(px[i], py[i], this.r[i], 0, 2 * Math.PI);
+      if (this.nodes[i].cand) { ctx.strokeStyle = this.color[i]; ctx.lineWidth = 1.5 / cam.k; ctx.stroke(); continue; }
       ctx.fillStyle = this.color[i];
-      ctx.beginPath(); ctx.arc(px[i], py[i], this.r[i], 0, 2 * Math.PI); ctx.fill();
+      ctx.fill();
       if (this.nodes[i].sharing === "confidential") { ctx.strokeStyle = "#000"; ctx.lineWidth = 1 / cam.k; ctx.stroke(); }
     }
     ctx.globalAlpha = 1;
@@ -205,14 +237,19 @@ export class Graph {
         this.tip.style.left = `${sx + 14}px`; this.tip.style.top = `${sy + 10}px`;
         this.tip.replaceChildren(Object.assign(document.createElement("b"), { textContent: n.key }), document.createElement("br"),
           document.createTextNode(`${n.title || ""} (${n.year || "?"})`), document.createElement("br"),
-          Object.assign(document.createElement("span"), { className: "muted", textContent: `cited by ${n.in} · cites ${n.out} in the library · click to open` }));
+          Object.assign(document.createElement("span"), { className: "muted", textContent: n.cand
+            ? `not in the library: cited by ${n.in} library papers · click to open the DOI`
+            : `cited by ${n.in} · cites ${n.out} in the library · click to open` }));
       } else this.tip.style.display = "none";
     });
     c.addEventListener("mouseleave", () => { this.hover = -1; this.tip.style.display = "none"; this.draw(); });
     c.addEventListener("click", (e) => {
       if (moved) return;
       const i = this.pick(...pos(e));
-      if (i >= 0) this.onOpen(this.nodes[i].key);
+      if (i < 0) return;
+      const n = this.nodes[i];
+      if (n.cand) { if (n.doi) window.open(`https://doi.org/${n.doi}`, "_blank", "noopener"); }
+      else this.onOpen(n.key);
     });
     c.addEventListener("wheel", (e) => {
       e.preventDefault();
