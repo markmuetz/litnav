@@ -339,3 +339,6 @@ milestone text above where the two differ.
    the text of licensed papers to Anthropic. Some publishers' text-mining
    terms restrict this. Proposed: allowed by default (as now), with `init`
    asking once and the answer stored in `library.toml`. OK?
+3. ~~Summaries without an API key.~~ Answered 2026-11-15: yes, through
+   Claude Code, defaulting to Haiku, with a warning that it is slower than
+   the Batch API (design § 17). Built in M7.

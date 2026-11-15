@@ -516,10 +516,12 @@ Settled 2026-11-15:
 - **Each user has their own library.** Shared corpora are out of scope for
   now, so reading and recall state stay inside the library.
 
-Still open:
-
-1. **Summaries without an API key**: let the curator skill write summaries
-   through the user's Claude Code session, as well as the batch API.
+- **Summaries without an API key** (decided 2026-11-15): `litnav summarize
+  --via claude-code` writes summaries through the user's Claude Code login,
+  one `claude -p` call per paper, as well as through the Batch API. It
+  defaults to a small, cheap model (Haiku) and warns before it starts that
+  this is slower than the Batch API: papers are done one at a time, and a
+  large library takes hours. `--model` overrides.
 
 ## 18. Plan
 
