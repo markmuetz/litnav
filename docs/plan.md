@@ -256,6 +256,86 @@ by code in this repo, where they would need special cases.
 - Commit at the end of every milestone, and in between whenever a piece works.
 - Questions an advisor can't settle are queued below, not blocked on.
 
+## Revisions after review (2026-11-15)
+
+An advisor review of the first draft changed these points; they override the
+milestone text above where the two differ.
+
+**Data and IDs**
+- Chunk IDs are `<key>#<section-slug>#<hash8>`, the hash over the chunk's
+  normalised text, so a re-chunk keeps IDs for unchanged text. Keys resolve
+  through aliases. Every piece of evidence stores its quote and `text.md`
+  offsets as well, so a dead ID can be re-found by quote. The index records a
+  chunker version.
+- Vectors are BLOBs in SQLite keyed by a hash of (model, header + text):
+  transactional, deletes handled, only changed text re-embedded. No
+  separate `vectors.npy`.
+- All file writes are atomic (temp file + `os.replace`); SQLite runs in WAL
+  mode; one lock file guards writers (CLI, web, MCP).
+- The index location is configurable (`index_dir`); `init` puts it in the
+  user cache directory when the library sits in a synced folder (Dropbox,
+  OneDrive, iCloud), which corrupts SQLite.
+- `track_text = false` keeps `text.md` locally, gitignored.
+
+**Sharing**
+- Each chunk row carries its item's sharing level; every search and fetch
+  goes through one query function that takes a purpose.
+- `net.py` is the only module that opens connections, and every call names a
+  purpose and the items it concerns. A test monkeypatches `socket` and fails
+  any other network access.
+- Confidential import: `_inbox/_confidential/` (or `import --confidential`)
+  skips text extraction and every lookup.
+- `open` is set only for explicit CC licences reported by OpenAlex, not from
+  open-access status alone.
+- The docs say plainly that the levels guard litnav's own code paths, not an
+  agent that has file access to the library.
+
+**Web**
+- Validate the `Host` header on every request (DNS rebinding); check
+  `Origin` on writes; no CORS headers; a per-run token required on all of
+  `/api`, `/pdf` and `/api/ask`; Markdown and extracted text sanitised
+  before rendering.
+- Git: commit only the paths a write touched, one commit per write, and skip
+  (with a warning) while a merge, rebase or `index.lock` is in progress.
+
+**Ask**
+- The `api` back end first, in-process, over the same functions as the MCP
+  server. `claude-code` second: run with only the litnav MCP tools allowed,
+  a strict MCP config and a working directory outside the library.
+
+**Search**
+- FTS5: every user token quoted (so `-`, `:`, `AND` are literal), NFKC
+  normalisation (ligatures), line-break hyphens rejoined, diacritics folded,
+  no stemming at first (acronyms), title and authors as weighted columns.
+- Paper-level search falls back to title + abstract + first chunk when an
+  item has no summary.
+- Embedding is resumable with progress; keyword search works while it runs.
+  `litnav doctor` checks pdftotext, tesseract, git, the model download, API
+  reachability.
+
+**Order and scope**
+- A minimal `reading.py` (list + due) moves to M1, so MCP and the web app
+  can use it.
+- MCP: `list_papers` filters by author, year and title words; result sizes
+  capped; `get_section` paginated.
+- Windows: `init` writes `.gitattributes` (`* text=auto eol=lf`), copes with
+  git missing or unconfigured; `key_style = keep` rejects keys that are
+  unsafe as filenames. CI includes `windows-latest`.
+- Zotero `file` fields: `;`-separated, `desc:path:mime`, escaped colons.
+- Deferred past v0.1: font-size heading cues, GROBID, model-detected
+  boundaries, rerank, `--serve-others` and the MCP write group (the purpose
+  table and its tests stay), new OCR backends beyond tesseract detection,
+  `merge`, citation-neighbourhood filters, candidate rings in the graph, bulk
+  assignment.
+- The retrieval eval questions live in the user's library
+  (`eval/questions.toml`), never in this repo: they describe a private corpus.
+
 ## Queued questions for the author
 
-(Appended as they come up.)
+1. **Eval questions (needed by M3).** 20–50 real questions you would ask your
+   library, each with the papers (ideally passages) a good answer must find.
+   Only you can write these; they gate the search comparison.
+2. **Default for `licensed` text going to a model.** Summaries and Ask send
+   the text of licensed papers to Anthropic. Some publishers' text-mining
+   terms restrict this. Proposed: allowed by default (as now), with `init`
+   asking once and the answer stored in `library.toml`. OK?
