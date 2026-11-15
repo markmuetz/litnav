@@ -2,8 +2,10 @@
 
 Heuristics, in order of trust:
 
-1. Manual headings: lines starting with `# ` or `## ` in text.txt. If any are
-   present, they are used exclusively (the user has fixed this paper by hand).
+1. Manual headings: when the item's meta.toml has `[files] sections =
+   "manual"`, lines in text.txt starting with `# ` or `## ` are the headings,
+   used exclusively (the user has fixed this paper by hand). Opt-in, because
+   some papers' text naturally contains such lines.
 2. Numbered headings (`1. Introduction`, `2 DATA AND METHODS`, `3.2 Results`,
    `IV. DISCUSSION`), accepted only as a plausible sequence: top-level numbers
    must start at 1 or 2 and go up by one; subsections must belong to the
@@ -118,7 +120,7 @@ def _known_kind(line: str) -> str | None:
     return KNOWN.get(t)
 
 
-def parse(raw: str) -> Parsed:
+def parse(raw: str, manual: bool = False) -> Parsed:
     text = normalise_text(strip_running_heads(raw)).replace("\f", "\n")
     lines = text.splitlines(keepends=True)
     offs, pos = [], 0
@@ -126,11 +128,11 @@ def parse(raw: str) -> Parsed:
         offs.append(pos)
         pos += len(l)
 
-    manual = [(i, MANUAL.match(l.strip())) for i, l in enumerate(lines)]
-    manual = [(i, m) for i, m in manual if m]
-    if manual:
+    marks = [(i, MANUAL.match(l.strip())) for i, l in enumerate(lines)] if manual else []
+    marks = [(i, m) for i, m in marks if m]
+    if marks:
         secs = []
-        for i, m in manual:
+        for i, m in marks:
             title = m.group(2).strip()
             kind = _known_kind(title) or "body"
             secs.append(Section(_slug(title), title, len(m.group(1)), kind, offs[i]))
@@ -215,7 +217,9 @@ def _finish(p: Parsed) -> Parsed:
     return p
 
 
+_BLANK = re.compile(r"\n[ \t]*\n")
+
+
 def _para_end(text: str, start: int) -> int:
-    m = re.compile(r"\n\s*\n").search(text, start)
-    end = m.start() if m else len(text)
-    return min(end, start + 1500)
+    m = _BLANK.search(text, start, min(len(text), start + 1500))
+    return m.start() if m else min(len(text), start + 1500)
