@@ -10,6 +10,8 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
+from .util import atomic_write
+
 WATERMARK = re.compile(r"^\s*(Unauthenticated|Brought to you by.*?) \| Downloaded .*$", re.M)
 MIN_TEXT = 200          # characters of real text on the first pages, below which it's a scan
 
@@ -103,3 +105,27 @@ def normalise_text(t: str) -> str:
     t = re.sub(r"(\w)-\n(\w)", r"\1\2", t)
     t = re.sub(r"[\x00-\x08\x0b\x0e-\x1f]", "", t)
     return t
+
+
+def extract_item(it, *, force=False, use_ocr=True, log=print) -> str:
+    """Write text.txt from the PDF (OCR for scans). Never for confidential items."""
+    if it.sharing == "confidential":
+        return "confidential"
+    if not it.has_pdf:
+        return "no pdf"
+    if it.has_text and not force:
+        return "has text"
+    src = it.meta.get("files", {}).get("text_source", "")
+    if it.has_text and src.startswith("ocr"):
+        return "ocr text kept"          # expensive to redo, and may be hand-checked
+    text = pdf_text(it.pdf_path)
+    how = "pdftotext" if shutil.which("pdftotext") else "pypdfium2"
+    if len(own_text(text).strip()) < MIN_TEXT:
+        if not (use_ocr and ocr_available()):
+            return "no text layer (OCR unavailable)"
+        log(f"  OCR {it.key} ...")
+        text, how = ocr(it.pdf_path), "ocr:tesseract"
+    atomic_write(it.text_path, own_text(text))
+    it.meta.setdefault("files", {})["text_source"] = how
+    it.save_meta()
+    return "extracted"

@@ -17,6 +17,8 @@ description: Keep a litnav library clean — import PDFs from the inbox, verify 
 | `litnav tag add\|rm <tag> <keys>`, `litnav share <level> <keys>` | tags, sharing |
 | `litnav fetch <keys or DOIs>` | open DOIs in the browser for the user to download |
 | `litnav extract`, `litnav index` | text for PDFs that lack it; update the search index |
+| `litnav summarize [keys] [--dry-run]` | summaries (Haiku); `--via claude-code` without an API key |
+| `litnav themes --update` | fold new papers into `derived/themes.md`, keeping existing themes |
 
 ## Rules
 

@@ -39,6 +39,9 @@ Ask answers questions from your library with links to the passages it used,
 through the Anthropic API (`ANTHROPIC_API_KEY`) or, without a key, through
 Claude Code if it is installed.
 
+See [`docs/quickstart.md`](docs/quickstart.md) for the full walk-through,
+including summaries, discovery and a Zotero export.
+
 ## Claude Code
 
 The repo is a Claude Code plugin: an MCP server with read-only tools

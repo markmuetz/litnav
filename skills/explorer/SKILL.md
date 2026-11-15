@@ -5,6 +5,17 @@ description: Find papers the user does not have yet — works the library cites 
 
 # Explorer: discovery outside the library
 
+## Commands
+
+| | |
+|---|---|
+| `litnav candidates [--min-cites N] [--add N]` | outside works cited by several library papers, with which papers cite them |
+| `litnav explore <keys> [--add N]` | Semantic Scholar recommendations for seed papers |
+| `litnav to-fetch [list\|add\|skip\|open N\|prune]` | the to-fetch list, `discovery/to-fetch.tsv` |
+
+Results flagged `[maybe held: <key>]` may already be in the library under
+another key or as a preprint: check before proposing them.
+
 ## Sources
 
 - **The citation graph** (`litnav graph`, OpenAlex): `graph.json` in the
@@ -28,14 +39,15 @@ description: Find papers the user does not have yet — works the library cites 
    library papers cite it or are cited by it). Rate interest from the
    abstract only if the user asks; never claim to have read a paper you only
    have metadata for.
-4. Papers the user wants go on `discovery/to-fetch.md` (key proposal, title,
-   DOI, where it came up).
+4. Papers the user wants go on the to-fetch list (`--add N`, or
+   `litnav to-fetch add <doi> --source <where it came up>`). Papers they
+   don't want: `litnav to-fetch skip <doi>`, so they are not proposed again.
 
 ## Boundaries
 
 - **Metadata only.** Send titles, DOIs or OpenAlex IDs to outside services;
   never text from the library, and nothing about `private` or `confidential`
   items.
-- **Never download PDFs.** To fetch, run `litnav fetch <DOIs>` (or open
-  `https://doi.org/<doi>`), a handful at a time, so the user downloads into
+- **Never download PDFs.** To fetch, run `litnav to-fetch open 5` (or
+  `litnav fetch <DOIs>`), a handful at a time, so the user downloads into
   the inbox.

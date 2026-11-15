@@ -201,6 +201,12 @@ def apply(lib, rows, *, tags=(), mode: str | None = None, log=print) -> dict:
             if r.get("via"):
                 m.setdefault("files", {})["identified_via"] = r["via"]
             it.save_meta()
+            if not conf:
+                from .extract import extract_item
+                try:
+                    extract_item(lib.get(r["key"]), log=log)
+                except Exception as e:          # a broken PDF must not stop the import
+                    log(f"  {r['key']}: no text ({e}); try `litnav extract {r['key']}`")
             counts["imported"] += 1
             log(f"  imported {r['key']}")
         elif r["status"] == "held" and r.get("dup_of"):

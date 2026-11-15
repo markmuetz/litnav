@@ -25,36 +25,13 @@ def add(sub):
     p.set_defaults(func=cmd_doctor)
 
 
-def extract_item(it, *, force=False, ocr=True, log=print) -> str:
-    if it.sharing == "confidential":
-        return "confidential"
-    if not it.has_pdf:
-        return "no pdf"
-    if it.has_text and not force:
-        return "has text"
-    src = it.meta.get("files", {}).get("text_source", "")
-    if it.has_text and src.startswith("ocr"):
-        return "ocr text kept"          # expensive to redo, and may be hand-checked
-    text = extract.pdf_text(it.pdf_path)
-    how = "pdftotext" if shutil.which("pdftotext") else "pypdfium2"
-    if len(extract.own_text(text).strip()) < extract.MIN_TEXT:
-        if not (ocr and extract.ocr_available()):
-            return "no text layer (OCR unavailable)"
-        log(f"  OCR {it.key} ...")
-        text, how = extract.ocr(it.pdf_path), "ocr:tesseract"
-    atomic_write(it.text_path, extract.own_text(text))
-    it.meta.setdefault("files", {})["text_source"] = how
-    it.save_meta()
-    return "extracted"
-
-
 def cmd_extract(a):
     from collections import Counter
     lib = Library.find(a.library)
     items = [lib.get(k) for k in a.keys] if a.keys else list(lib.items())
     c = Counter()
     for it in items:
-        r = extract_item(it, force=a.force, ocr=not a.no_ocr)
+        r = extract.extract_item(it, force=a.force, use_ocr=not a.no_ocr)
         c[r] += 1
         if r == "extracted":
             print(f"  {it.key}", file=sys.stderr)
