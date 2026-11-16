@@ -12,6 +12,7 @@ through `Library.items(purpose=...)` / `Item.allowed(purpose)`.
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import cached_property
 from pathlib import Path
@@ -171,6 +172,7 @@ class Library:
         self.pdf_dir = config.pdf_dir(self.root, self.config)
         self.state_dir = self.root / config.STATE_DIR
         self._aliases: dict[str, str] | None = None
+        self._alias_stamp = None           # meta.toml mtimes when aliases were read
         self._fold: dict[str, str] | None = None
         self._seen: int | None = None      # papers/ mtime when the caches were built
         self._cfg_stamp = self._config_stamp()
@@ -216,8 +218,23 @@ class Library:
                 continue
             yield it
 
+    def _meta_stamp(self):
+        newest, n = 0, 0
+        try:
+            entries = list(os.scandir(self.papers_dir))
+        except FileNotFoundError:
+            return None
+        for e in entries:
+            try:
+                newest = max(newest, os.stat(os.path.join(e.path, "meta.toml")).st_mtime_ns)
+                n += 1
+            except OSError:
+                pass
+        return newest, n
+
     def alias_map(self) -> dict[str, str]:
         if self._aliases is None:
+            self._alias_stamp = self._meta_stamp()
             m = {}
             for k in self.keys():
                 for a in meta.read(self.papers_dir / k / "meta.toml").get("aliases", []):
@@ -266,7 +283,14 @@ class Library:
         """Exact key, case-insensitive key, or alias."""
         self._fresh()
         cf = key.casefold()
-        return self._folded().get(cf) or self.alias_map().get(cf)
+        hit = self._folded().get(cf) or self.alias_map().get(cf)
+        if hit is None and self._alias_stamp != self._meta_stamp():
+            # an alias added by hand to meta.toml doesn't change papers/'s
+            # mtime: re-read the aliases if any meta.toml changed (a stat each,
+            # ~3 ms for 1,200 papers)
+            self._aliases = None
+            hit = self.alias_map().get(cf)
+        return hit
 
     def get(self, key: str) -> Item:
         k = self.resolve(key)

@@ -190,3 +190,41 @@ def test_rename_reads_notes_first(lib):
     n.write_bytes(b"See [@a2020x] \xff here.\n")
     rename.apply(lib, rename.plan(lib, "a2020x", "b2020y"))
     assert n.read_bytes() == b"See [@b2020y] \xff here.\n"
+
+
+def test_hand_added_alias_resolves(ilib):
+    """An alias written into meta.toml by hand is seen without a restart."""
+    from litnav import meta
+    assert ilib.resolve("smith2021cold") == "smith2021cold"   # caches built
+    assert ilib.resolve("oldkey2020") is None
+    p = ilib.papers_dir / "smith2021cold" / "meta.toml"
+    m = meta.read(p)
+    m["aliases"] = ["OldKey2020"]
+    meta.write(p, m)
+    assert ilib.resolve("oldkey2020") == "smith2021cold"
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX shell script as a fake claude")
+def test_ask_silent_claude_killed_after_close(ilib, tmp_path, monkeypatch):
+    """A claude that prints nothing still yields pings, so a closed page
+    (the generator closed after a ping) stops it."""
+    import os
+    import time
+    from litnav import ask
+    pidf = tmp_path / "pid"
+    fake = tmp_path / "claude"
+    fake.write_text(f"#!/bin/sh\necho $$ > {pidf}\ncat >/dev/null\nexec sleep 30\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(ask, "PING", 0.2)
+    g = ask.stream_answer(ilib, "q")
+    t0 = time.time()
+    for ev in g:
+        if ev["type"] == "ping" and pidf.exists():
+            break
+    assert time.time() - t0 < 10
+    g.close()
+    pid = int(pidf.read_text())
+    time.sleep(0.2)
+    with pytest.raises(OSError):
+        os.kill(pid, 0)

@@ -99,7 +99,8 @@ vectors.
      temporary directory with built-in tools disabled (`--tools ""`),
      `--strict-mcp-config`, `--allowedTools mcp__litnav`, no session
      persistence, no settings or slash commands. Its stream-JSON is mapped to
-     events.
+     events. After 2 s without output a `ping` is sent (an SSE comment the
+     page ignores), so a closed page is noticed and `claude` is killed.
    - **api**: a streaming Messages-API loop (`MAX_TURNS` 14) with
      `TOOL_DEFS` mirroring the MCP tools; each tool call is validated against
      its schema and run on `Tools(lib, purpose=send_out)`.

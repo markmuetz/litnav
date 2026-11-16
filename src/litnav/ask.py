@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 from . import sharing as S
 from .tools import Tools
@@ -270,10 +272,43 @@ def _claude_code(lib, question, history):
     yield {"type": "done"}
 
 
-def _cc_events(p):
+PING = 2.0    # seconds of silence before a ping, so a closed page is noticed
+
+
+def _lines(p, ping=None):
+    """claude's stdout lines, with None after each `ping` seconds of silence.
+    A reader thread does the blocking reads, so the consumer gets control back
+    while claude works quietly; the web app writes each ping to the stream,
+    finds the page gone, and the generator's close kills claude."""
+    ping = ping or PING
+    q = queue.Queue()
+
+    def pump():
+        for line in p.stdout:
+            q.put(line)
+        q.put(_EOF)
+    threading.Thread(target=pump, daemon=True).start()
+    while True:
+        try:
+            line = q.get(timeout=ping)
+        except queue.Empty:
+            yield None
+            continue
+        if line is _EOF:
+            return
+        yield line
+
+
+_EOF = object()
+
+
+def _cc_events(p, ping=None):
     """Map claude's stream-json output to Ask events."""
     names = {}
-    for line in p.stdout:
+    for line in _lines(p, ping):
+        if line is None:
+            yield {"type": "ping"}
+            continue
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:

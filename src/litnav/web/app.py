@@ -308,7 +308,9 @@ def create_app(lib: Library, port: int, token: str | None = None, key: str | Non
 
         def gen():
             for ev in stream_answer(lib, question, history=b.get("history") or []):
-                yield f"data: {json.dumps(ev)}\n\n"
+                # a ping is an SSE comment: the page ignores it, but writing it
+                # finds out if the page has gone (then claude is stopped)
+                yield ": ping\n\n" if ev["type"] == "ping" else f"data: {json.dumps(ev)}\n\n"
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store"})
 
