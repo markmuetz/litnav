@@ -8,7 +8,7 @@ date: "2026-11-15 (v0.1.0)"
 
 | # | Document | What it answers |
 |---|---|---|
-| 1 | **Overview** (this one) | What are the parts, how do they connect, what are the common jobs? |
+| 1 | **Overview** (this one) | What are the parts, how do they connect, what do you ask Claude to do with them? |
 | 2 | **Data and storage** | Which files exist, what is in them, who writes them, which outside services are called |
 | 3 | **Data flows** | Step by step: import, index and search, Ask, summaries and themes, citation graph and discovery, reading and recall |
 | 4 | **Interfaces** | The CLI, the MCP server and its tools, the web app's HTTP API, the Claude Code plugin |
@@ -24,9 +24,9 @@ receives text (models).
 
 litnav is a **folder of files** (one directory per paper, plus your notes and
 reading lists) kept in git, and a **derived SQLite index** built from those
-files. Everything else is a way in or out of that pair: a **CLI** for you, a
-**web app** on localhost for browsing, an **MCP server** that gives Claude
-Code read-only tools, and a few **workflows** that write to the files
+files. Everything else is a way in or out of that pair: a **CLI**, run
+mostly by Claude Code on your behalf, a **web app** on localhost for
+browsing, an **MCP server** that gives Claude Code read-only tools, and a few **workflows** that write to the files
 (import, summaries, reading lists, discovery). Every path that could send
 something off the machine asks one table in `sharing.py` first.
 
@@ -36,8 +36,9 @@ something off the machine asks one table in `sharing.py` first.
 
 Reading the map from top to bottom:
 
-1. **Who.** You, at a terminal or in a browser, and Claude Code with the
-   litnav plugin installed (four skills and `/litnav:discuss`).
+1. **Who.** Mostly Claude Code, working for you with the litnav plugin
+   (five skills and `/litnav:discuss`), and you in a browser. You can run
+   the CLI yourself, but the usual way in is to ask Claude.
 2. **Interfaces.** Three thin front ends. The CLI does everything; the web app
    reads and does a few small writes (tags, sharing, reading list, to-fetch);
    the MCP server is read-only.
@@ -82,41 +83,31 @@ Two rules keep the layers honest:
 
 # Common use cases
 
-Each row is a job you do; the right-hand column names the flow in document 3.
+**You talk to Claude; Claude runs litnav.** You rarely type a litnav command.
+You tell Claude Code, started in the library folder, what you want; it reads
+the library through the MCP tools, makes changes with the CLI, and follows the
+plugin's skills and the library's `CLAUDE.md`. You decide (what to read,
+whether a match is right, what is confidential); Claude does the steps. The
+web app is the one place you work directly, for browsing.
 
-| You want to... | You run | What happens (flow) |
+| You tell Claude... | Claude... | Flow |
 |---|---|---|
-| Add new papers | save PDFs to `<pdf_dir>/_inbox/`, then `litnav import`, check, `litnav import --apply` | Identify, verify, de-duplicate, create items, prune to-fetch (**3.1**) |
-| Make them searchable | `litnav index` (and `litnav summarize --via claude-code` if you want summaries) | Sections, chunks, FTS, embeddings (**3.2**); summaries (**3.4**) |
-| Find where something is said | `litnav search '"TWP-ICE" downdrafts'`, or the web Search tab | Hybrid keyword + semantic search over passages (**3.2**) |
-| Ask a question of the library | web Ask tab, or ask Claude Code (researcher skill) | Tool-use loop over read-only tools, cited answer (**3.3**) |
-| Read a paper's part | web Paper view, or `get_section` via MCP | Section text from the index; PDF from `/pdf/<key>` |
-| See how papers connect | `litnav graph`, then the web Graph tab | OpenAlex references -> internal edges + outside candidates (**3.5**) |
-| Find what you are missing | `litnav candidates`, `litnav explore <keys>`, web Discovery tab | Candidates and recommendations -> `to-fetch.tsv` -> browser (**3.5**) |
-| Plan and track reading | `litnav read add <key> --depth read`, `litnav read done <key> --depth read` | Reading list and recall cards (**3.6**) |
-| Keep what you read | `litnav due`, `litnav recall <id> easy`, `/litnav:discuss <key>` | Leitner scheduling, quiz and discussion logs (**3.6**) |
-| Write with citations | `litnav bib --project P --out refs.bib`; `[@key]` in notes | BibTeX export; backlinks from notes |
-| Keep a draft private | put it in `_inbox/_confidential/` or `litnav share <key> confidential` | Never read, looked up, or sent (**5**) |
+| "I've downloaded two papers on cold pools" | finds them in Downloads, checks none is a draft or a manuscript you are refereeing, imports them with verified metadata, indexes and summarises them, files them in a project or on the reading list if you say so, and reports the new keys | **3.1**, **3.2**, **3.4** |
+| "What does my library say about X?" | searches by keyword and by meaning, reads the matching sections and your notes, and answers with every claim cited to a passage (`[@key]` + chunk ID) | **3.2**, **3.3** |
+| "Write up what's known about X" / "Has anyone done Y?" | checks your topic notes, searches the library, then outside sources by metadata only, and writes or updates `topics/<slug>.md` with a short answer and a search record | **3.2**, **3.5** |
+| "What am I missing on X?" / "Get me these papers" | lists works your library cites but lacks, or recommendations, adds the ones you pick to the to-fetch list, and opens their DOIs in your browser for you to download | **3.5** |
+| "Add X to my reading list, skim" / "I've finished X" | updates the reading list; when you finish, records the depth and makes a recall card; starts a notes file from the template if you ask | **3.6** |
+| "What's due?" / "Let's discuss X" | gives one summary of recall cards and reading due; rates cards with you; in a discussion, asks you to explain the paper and logs what was solid and what was shaky | **3.6** |
+| "Add these to ALOFT, to read" / "ALOFT papers on X" | updates the project's papers, status and tags; searches within a project | **3.2** |
+| "Make a .bib for this paper" | exports BibTeX for the keys cited, and checks every `[@key]` resolves | |
+| "Here's the new version of the X draft" | files it as the current version, moves the old one to `_variants/`, logs it; never opens it | **5** |
+| "This key/bib is wrong" / "these are the same paper" | fixes metadata, renames keys (the old key stays as an alias), merges duplicates with your say on which survives | **3.1** |
+| "Open the library" | starts the web app and gives you its link, for browsing papers, the citation graph and Ask yourself | **4.3** |
 
-# A day in the life of one paper
+What stays with you: downloading PDFs (Claude only opens DOIs), deciding
+what is read and how well you remember it, writing your notes, and marking
+anything confidential that the library cannot recognise on its own (a note
+written for a review: front matter `sharing: confidential`).
 
-1. You download `JAS-D-23-0123.pdf` into `_inbox/UPFLO/`.
-2. `litnav import` finds DOI `10.1175/...` on page 1, asks Crossref for the
-   record, checks the title's words are in the PDF, sees no existing item with
-   that hash, DOI or title, and proposes key `smith2024cold`, tag `UPFLO`.
-3. `--apply` writes `papers/smith2024cold/{ref.bib, meta.toml, text.txt}`,
-   moves the PDF to `<pdf_dir>/smith2024cold.pdf`, and removes the DOI from
-   the to-fetch list.
-4. `litnav index` splits the text into sections and ~300-word chunks
-   (`smith2024cold#3-2#9f1c04ab`), adds them to the full-text index, and embeds
-   them locally.
-5. `litnav summarize --via claude-code` checks the paper's sharing level allows
-   sending text to a model, sends the text to Haiku through your Claude Code
-   login, and writes `summary.json`; re-indexing makes the summary searchable
-   and improves the paper's vector.
-6. Claude Code, asked about cold pools, calls `search_literature` over MCP,
-   gets this paper's passage with its chunk ID, reads the section with
-   `get_section`, and cites `[@smith2024cold]` with the chunk ID.
-7. You add it to the reading list, read it, write `notes/smith2024cold.md`,
-   mark it done, and it becomes a recall card. A week later
-   `/litnav:discuss smith2024cold` asks you to explain it, and logs the session.
+For one paper followed end to end, through every flow and the files each
+step writes, see "A day in the life of one paper" at the end of document 3.

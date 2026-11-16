@@ -182,3 +182,65 @@ the tick-box, candidates as hollow rings linked to their citers.
   command + reader skill) prepares quietly, lets you explain first, probes,
   corrects only from passages with chunk IDs, logs the session, and can rate
   a due card on the gist with your agreement.
+
+# 3.7 End to end: a day in the life of one paper
+
+One paper through every flow above, with the command Claude runs at each
+step and what it writes. You only talk to Claude and download the PDF.
+
+1. **Discovery (3.5).** Asked what is missing on cold pools, Claude runs
+   `litnav candidates` (works cited by several library papers, from
+   `.litnav/graph.json`), you pick one, and `litnav to-fetch add <doi>
+   --source candidates:7` then `litnav to-fetch open 1` open its DOI in your
+   browser. Only the DOI left the machine (OpenAlex had the reference lists
+   already). You save `JAS-D-23-0123.pdf` to Downloads and tell Claude
+   "got the cold-pool paper, put it in UPFLO".
+2. **Import, dry run (3.1).** `litnav import --from-downloads` lists PDFs
+   from the last two hours, skipping byte-identical re-downloads and names
+   like *draft* or *review*; nothing is read or sent yet. Claude checks the
+   list is what you meant, then re-runs it with `--apply`. Now the plan step
+   runs: `identify.py` finds DOI `10.1175/...` on page 1, `net.Client`
+   (purpose `lookup`) asks Crossref for the record, the resolved title's
+   distinctive words are checked against the PDF's text, and the `Catalogue`
+   finds no existing item with that SHA-256, DOI or normalised title. The
+   proposal, key `smith2024cold` (`<surname><year><first content word>`), is
+   written to `.litnav/import-plan.tsv`.
+3. **Import, apply (3.1).** `importer.apply` creates
+   `papers/smith2024cold/` with `ref.bib` (normalised to house style) and
+   `meta.toml` (`pdf_sha256`, `identified_via = "doi"`; with no `sharing`
+   line the item takes `default_sharing`), moves the PDF to
+   `<pdf_dir>/smith2024cold.pdf`, extracts `text.txt` (pdftotext, or OCR for
+   a scan), and `discovery.prune` drops the DOI from `to-fetch.tsv`. Claude
+   then runs `litnav project add UPFLO smith2024cold --status "to read"`
+   (`projects/UPFLO/papers.toml`).
+4. **Index (3.2).** `litnav index` sees a new signature, detects sections
+   in `text.txt`, cuts ~300-word chunks with IDs like
+   `smith2024cold#3-2#9f1c04ab` (the hash is over the chunk's normalised
+   text, so the ID survives re-chunking), writes `items`, `sections`,
+   `chunks` and both FTS tables, copies the item's sharing level onto every
+   chunk, and `embed.update` embeds the new chunks locally (fastembed). The
+   index generation is bumped, so the web app and MCP server rebuild their
+   cached vector matrices on their next search.
+5. **Summary (3.4).** `litnav summarize smith2024cold --via claude-code`
+   passes the text through `derived.outbound()`, which checks the level
+   allows `send_out` (and, with `licensed_to_models = false`, refuses
+   licensed text), runs `claude -p` with Haiku on your login, and writes
+   `summary.json`. Re-indexing adds the summary to `items_fts` and gives the
+   paper a better vector for paper-level search and `similar`.
+6. **Search and answer (3.2, 3.3).** Days later you ask about cold-pool
+   spreading rates. Claude calls `search_literature` over MCP (purpose
+   `send_out`; `Tools._live()` re-checks `meta.toml`), gets this paper's
+   passage by keyword and by meaning fused with reciprocal rank, reads the
+   section with `get_section`, checks your notes with `search_notes`, and
+   cites `[@smith2024cold]` with the chunk ID and a short verbatim quote.
+7. **Reading and recall (3.6).** You ask Claude to put it on your reading
+   list (`litnav read add smith2024cold --depth read`, `reading/list.toml`).
+   You write `notes/smith2024cold.md`; at the next `litnav index` its
+   passages go in the `notes` table, private (sendable to Claude) because
+   the paper is not confidential. When you say
+   you've read it, `litnav read done` records the depth and date and adds a
+   card to `reading/recall.toml` (box 1, due the next working day). A week
+   later "let's discuss smith2024cold" runs the discussion protocol: you
+   explain, Claude probes and checks against the passages, and `litnav quiz
+   start smith2024cold --discuss` logs it in `quizzes/smith2024cold.md`.
+   `litnav recall` rates the card on the gist and moves it between boxes.
