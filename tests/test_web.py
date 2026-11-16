@@ -9,14 +9,15 @@ from litnav.web.app import create_app  # noqa: E402
 
 PORT = 8765
 TOKEN = "t0ken"
+KEY = "launch-key"
 ORIGIN = f"http://127.0.0.1:{PORT}"
 
 
 @pytest.fixture
 def client(ilib):
-    c = TestClient(create_app(ilib, PORT, token=TOKEN), base_url=ORIGIN)
-    r = c.get("/")
-    assert r.status_code == 200 and TOKEN in r.text     # sets the session cookie
+    c = TestClient(create_app(ilib, PORT, token=TOKEN, key=KEY), base_url=ORIGIN)
+    r = c.get("/", params={"key": KEY})                 # sets the session cookie, redirects
+    assert r.status_code == 200 and TOKEN in r.text
     return c
 
 
@@ -26,11 +27,17 @@ def post(c, path, body, **h):
 
 
 def test_guard(ilib):
-    c = TestClient(create_app(ilib, PORT, token=TOKEN), base_url=ORIGIN)
+    c = TestClient(create_app(ilib, PORT, token=TOKEN, key=KEY), base_url=ORIGIN)
     assert c.get("/api/items").status_code == 401                       # no cookie
-    bad = TestClient(create_app(ilib, PORT, token=TOKEN), base_url="http://evil.example:8765")
-    assert bad.get("/").status_code == 403                              # DNS rebinding
-    c.get("/")
+    bad = TestClient(create_app(ilib, PORT, token=TOKEN, key=KEY), base_url="http://evil.example:8765")
+    assert bad.get("/", params={"key": KEY}).status_code == 403         # DNS rebinding
+    # another user on the machine can reach 127.0.0.1 but has no launch key
+    r = c.get("/")
+    assert r.status_code == 403 and TOKEN not in r.text
+    assert c.get("/", params={"key": "guess"}).status_code == 403
+    assert c.get("/api/items").status_code == 401
+    c.get("/", params={"key": KEY})
+    assert c.get("/").status_code == 200                                # the cookie is enough now
     assert c.post("/api/reading", json={}).status_code == 403            # no token header
     assert post(c, "/api/reading", {}, Origin="http://evil.example").status_code == 403
 

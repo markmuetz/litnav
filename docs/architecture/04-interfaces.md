@@ -75,16 +75,23 @@ Tags, Reading, Discovery, Ask.
 1. binds to `127.0.0.1` only;
 2. `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (stops DNS
    rebinding);
-3. `GET /` sets a random per-run session cookie (`HttpOnly`,
-   `SameSite=Strict`), required on every `/api` and `/pdf` request;
-4. every `POST` also needs the token in `X-Litnav-Token` and our own `Origin`;
+3. **a launch key**: `litnav serve` prints and opens
+   `http://127.0.0.1:<port>/?key=<random>`. Only that link gets the page.
+   On a shared machine (e.g. a JASMIN sci node) other users can also reach
+   127.0.0.1, so the port alone proves nothing;
+4. the link sets a random per-run session cookie (`HttpOnly`,
+   `SameSite=Strict`, named `litnav<port>`) and redirects to `/`; the
+   cookie is required for the page and on every `/api` and `/pdf` request;
+5. every `POST` also needs the token in `X-Litnav-Token` and our own `Origin`;
    no CORS headers are sent;
-5. a strict Content-Security-Policy (`default-src 'self'`); the page builds
-   DOM with `textContent` and escapes before rendering Markdown.
+6. a strict Content-Security-Policy (`default-src 'self'`); the page builds
+   DOM with `textContent` and escapes before rendering Markdown; every
+   link shows its full address, so an answer cannot hide data in a URL.
 
 | Method + path | Does | Notes |
 |---|---|---|
-| `GET /` | the page, with the session token | sets the cookie |
+| `GET /?key=K` | checks the launch key, sets the session cookie, redirects to `/` | 403 without it |
+| `GET /` | the page, with the session token | needs the cookie |
 | `GET /api/items` | list/filter items (`q`, `tag`, `project`) | from `items` |
 | `GET /api/item/{key}` | one item: metadata, summary, sections, note, backlinks, edges | |
 | `GET /api/item/{key}/section/{slug}` | a section's text | |

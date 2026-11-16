@@ -79,7 +79,8 @@ Embeddings run on your computer; nothing is sent anywhere.
 litnav serve
 ```
 
-opens a page with your library, search, each paper (summary, notes,
+opens a page in your browser (if you close it, use the link it prints: the
+`?key=` part is what lets you in) with your library, search, each paper (summary, notes,
 sections, what it cites and what cites it), the citation network, tags, your
 reading list, and **Ask**, where Claude answers questions from your papers
 with links to the passages it used.

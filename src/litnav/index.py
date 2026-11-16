@@ -74,7 +74,9 @@ def connect(lib, readonly: bool = False) -> sqlite3.Connection:
 
 
 def bump(con) -> None:
-    """Advance the index generation: readers' caches (embed.matrix) key on it."""
+    """Advance the index generation when the set of embedded passages or
+    papers changes: embed.matrix's cache keys on it. (A sharing change does
+    not need it: the sharing mask is computed for every query.)"""
     con.execute("INSERT INTO state VALUES ('gen', '1') ON CONFLICT(k) DO UPDATE "
                 "SET v = CAST(v AS INTEGER) + 1")
 
@@ -128,6 +130,7 @@ def signature(it) -> str:
         except FileNotFoundError:
             parts.append("-")
     parts.append("pdf" if it.has_pdf else "nopdf")
+    parts.append(it.sharing)             # catches a changed default_sharing too
     return "|".join(parts)
 
 
@@ -187,10 +190,16 @@ def index_item(con, it) -> int:
 def update(lib, *, rebuild: bool = False, keys_=None, log=print) -> dict:
     stats = {"indexed": 0, "unchanged": 0, "removed": 0, "chunks": 0}
     if rebuild and db_path(lib).exists():
-        for suffix in ("", "-wal", "-shm"):
-            p = Path(str(db_path(lib)) + suffix)
-            if p.exists():
-                p.unlink()
+        # In place, not by deleting the file: open readers (web app, MCP
+        # server) keep a valid connection, and stored vectors (keyed by a hash
+        # of their text) are kept, so nothing unchanged is embedded again.
+        with writer(lib) as con:
+            for t in ("items", "items_fts", "sections", "chunks", "chunks_fts", "paper_vectors",
+                      "backlinks"):
+                con.execute(f"DROP TABLE IF EXISTS {t}")
+            con.execute("DELETE FROM state WHERE k='chunker'")
+        with writer(lib) as con:
+            con.executescript(SCHEMA)
     with writer(lib) as con:
         have = {r["key"]: r["sig"] for r in con.execute("SELECT key, sig FROM items")}
         present = set(lib.keys())
@@ -203,14 +212,20 @@ def update(lib, *, rebuild: bool = False, keys_=None, log=print) -> dict:
             if have.get(it.key) == signature(it) and not keys_:
                 stats["unchanged"] += 1
                 continue
+            before = con.execute("SELECT group_concat(vhash, ',') FROM "
+                                 "(SELECT vhash FROM chunks WHERE key=? ORDER BY id)", (it.key,)).fetchone()[0]
             stats["chunks"] += index_item(con, it)
+            after = con.execute("SELECT group_concat(vhash, ',') FROM "
+                                "(SELECT vhash FROM chunks WHERE key=? ORDER BY id)", (it.key,)).fetchone()[0]
             stats["indexed"] += 1
+            if before != after:
+                stats["vectors_changed"] = True
             if n % 100 == 0:
                 log(f"  indexed {n}/{len(todo)}")
                 con.commit()
         con.execute("INSERT OR REPLACE INTO state VALUES ('chunker', ?)", (str(C.VERSION),))
-        if stats["indexed"] or stats["removed"]:
-            bump(con)
+        if stats.pop("vectors_changed", False) or stats["removed"]:
+            bump(con)                    # the set of embedded passages changed
     return stats
 
 

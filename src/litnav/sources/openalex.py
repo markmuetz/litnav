@@ -35,11 +35,15 @@ def by_ids(client, ids: list[str]) -> list[dict]:
     return out
 
 
-def cc_licence(work: dict) -> str | None:
+def cc_licence(work: dict, primary_only: bool = False) -> str | None:
     """An explicit Creative Commons (or public domain) licence, else None.
     Open-access status alone is not enough: bronze OA is free to read, not to
-    redistribute."""
-    for loc in (work.get("best_oa_location"), work.get("primary_location")):
+    redistribute. With primary_only, only the publisher's version counts (a
+    CC-licensed repository or preprint copy says nothing about the PDF the
+    user holds)."""
+    locs = (work.get("primary_location"),) if primary_only else \
+        (work.get("best_oa_location"), work.get("primary_location"))
+    for loc in locs:
         lic = ((loc or {}).get("license") or "").lower()
         if lic in CC:
             return lic

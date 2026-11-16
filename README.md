@@ -31,7 +31,7 @@ litnav import --apply
 litnav index                    # sections, chunks, local embeddings
 litnav search "cold pools organise convection"
 litnav graph                    # citation network from OpenAlex
-litnav serve                    # web app on http://127.0.0.1:8765
+litnav serve                    # web app: opens http://127.0.0.1:8765/?key=...
 ```
 
 The web app has Library, Search, Paper, Graph, Tags, Reading and Ask views.

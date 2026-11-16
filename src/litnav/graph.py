@@ -41,8 +41,14 @@ def build(lib, client, *, min_cites: int = 3, log=print) -> dict:
         lic = openalex.cc_licence(w)
         if lic and it.meta.get("files", {}).get("licence") != lic:
             it.meta.setdefault("files", {})["licence"] = lic
-            if "sharing" not in it.meta:
-                it.meta["sharing"] = "open"
+            changed = True
+        # Only the publisher's version's licence may open an item up, and only
+        # an item still at the default `licensed` level (never a level the
+        # user chose, nor a stricter library default). The source is recorded.
+        if ("sharing" not in it.meta and it.sharing == "licensed"
+                and openalex.cc_licence(w, primary_only=True)):
+            it.meta["sharing"] = "open"
+            it.meta.setdefault("files", {})["sharing_source"] = "openalex-cc"
             changed = True
         if changed:
             it.save_meta()

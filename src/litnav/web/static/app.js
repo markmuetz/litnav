@@ -42,7 +42,10 @@ function inline(s) {
              (m, id) => `(<a class="cid" data-chunk="${id}">${id}</a>)`)
     .replace(new RegExp(`(^|[\\[;\\s(])-?@(${KEY})`, "g"),
              (m, pre, k) => `${pre}<a data-key="${k}">@${k}</a>`)
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // the full address is always shown: a model answer could otherwise hide
+    // note or passage text inside a link's URL behind innocent link text
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+             '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a> <span class="url">&lt;$2&gt;</span>');
 }
 function md(src) {
   const lines = esc(src || "").split("\n");

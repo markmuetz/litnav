@@ -76,11 +76,17 @@ shows which notes cite it; `rename` rewrites them.
   search.
 - **Concurrency.** WAL mode; writers use `index.writer()`. Long-lived readers
   (web app, MCP server) hold one read-only connection through
-  `index.Reader`, which reopens it if the file is replaced by a rebuild.
-- **Generation.** Every write that changes items or vectors bumps
-  `state.gen`; the in-memory vector matrix (`embed.matrix`) is cached per
-  index file and rebuilt when the generation changes, so a sharing change
-  reaches semantic search at once.
+  `index.Reader` (reopened if the file is deleted and recreated by hand).
+  `litnav index --rebuild` works **in place**: it drops and recreates the
+  tables in the same file, so open readers stay valid, and keeps the stored
+  vectors (keyed by a hash of their text), so nothing unchanged is embedded
+  again.
+- **Generation.** A write that changes which passages or papers have
+  vectors bumps `state.gen`. The in-memory matrix of vectors
+  (`embed.matrix`) is cached per index file and rebuilt only when the
+  generation or the vector count changes; the **sharing levels are read
+  fresh for every query**, so a sharing change reaches semantic search at
+  once without rebuilding the matrix.
 - **Sharing is stored twice**: in `meta.toml` (the truth) and copied onto
   `items`/`chunks` for fast filtering. `litnav share` and the web app reindex
   the item at once; the model-facing tools also re-check each result against

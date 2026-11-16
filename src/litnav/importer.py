@@ -99,7 +99,10 @@ def inbox_files(lib) -> list[tuple[Path, str]]:
     for p in sorted(lib.inbox.rglob("*")):
         if p.is_file() and p.suffix.lower() == ".pdf":
             rel = p.relative_to(lib.inbox)
-            out.append((p, rel.parts[0] if len(rel.parts) > 1 else ""))
+            tag = rel.parts[0] if len(rel.parts) > 1 else ""
+            if tag.casefold().lstrip("_") == "confidential":
+                tag = CONFIDENTIAL_DIR           # _confidential, confidential, _Confidential ...
+            out.append((p, tag))
     return out
 
 

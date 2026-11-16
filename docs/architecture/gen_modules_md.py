@@ -80,6 +80,6 @@ out += ["", "# Web front end (`web/static/`)", "",
         "| `graph.js` | force-directed citation graph on a canvas; colour by decade/tag; candidate rings |",
         "| `style.css` | dark theme |",
         "", "# Tests", "",
-        "`tests/` runs with `pytest` (119 tests, ~3 s): library and keys, bib normalisation, import and identification with recorded API responses, sections and chunks, index and search, the sharing gates (net refusal, outbound, MCP tools, search filters), derived routes with a fake `claude`, the web app's guard and endpoints, reading and recall dates, discovery, quizzes. CI runs them on Ubuntu, macOS and Windows with Python 3.11-3.13."]
+        "`tests/` runs with `pytest` (122 tests, ~4 s): library and keys, bib normalisation, import and identification with recorded API responses, sections and chunks, index and search, the sharing gates (net refusal, outbound, MCP tools, search filters), derived routes with a fake `claude`, the web app's guard and endpoints, reading and recall dates, discovery, quizzes. CI runs them on Ubuntu, macOS and Windows with Python 3.11-3.13."]
 Path("docs/architecture/06-modules.md").write_text("\n".join(out) + "\n")
 print(len(rows))

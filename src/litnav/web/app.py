@@ -4,8 +4,11 @@ Security model (it serves full text and PDFs of licensed papers):
 - binds to 127.0.0.1 only;
 - every request's Host header must be 127.0.0.1:<port> or localhost:<port>
   (defeats DNS rebinding);
-- GET / sets a random per-run session cookie (HttpOnly, SameSite=Strict);
-  every /api and /pdf request must carry it;
+- the page is only served to a browser that opened the link `litnav serve`
+  prints (`/?key=<launch key>`, as Jupyter does): on a shared machine other
+  users can reach 127.0.0.1 too, so the port alone proves nothing;
+- that link sets a random per-run session cookie (HttpOnly, SameSite=Strict,
+  named after the port); every page, /api and /pdf request must carry it;
 - writes (POST) must also send the token in X-Litnav-Token and come from our
   own Origin; no CORS headers are ever sent;
 - the page builds DOM with textContent and escapes before rendering
@@ -57,16 +60,18 @@ class Git:
                                                           else r.stderr.strip()[:200])
 
 
-def create_app(lib: Library, port: int, token: str | None = None):
+def create_app(lib: Library, port: int, token: str | None = None, key: str | None = None):
     from starlette.applications import Starlette
     from starlette.middleware import Middleware
     from starlette.requests import Request
     from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
-                                     Response, StreamingResponse)
+                                     RedirectResponse, Response, StreamingResponse)
     from starlette.routing import Mount, Route
     from starlette.staticfiles import StaticFiles
 
-    token = token or secrets.token_urlsafe(24)
+    token = token or secrets.token_urlsafe(24)       # session: cookie + X-Litnav-Token
+    key = key or secrets.token_urlsafe(24)           # launch: only in the printed URL
+    cookie = f"litnav{port}"
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     origins = {f"http://{h}" for h in hosts}
     git = Git(lib.root)
@@ -85,8 +90,16 @@ def create_app(lib: Library, port: int, token: str | None = None):
             if req.headers.get("host") not in hosts:
                 return await PlainTextResponse("bad host", 403)(scope, receive, send)
             path = scope["path"]
+            if path == "/" and req.cookies.get(cookie) != token:
+                if not secrets.compare_digest(req.query_params.get("key", ""), key):
+                    return await PlainTextResponse(
+                        "Open the link that `litnav serve` printed (it carries the key).",
+                        403)(scope, receive, send)
+                r = RedirectResponse("/", 303)
+                r.set_cookie(cookie, token, httponly=True, samesite="strict")
+                return await r(scope, receive, send)
             if path.startswith(("/api", "/pdf")):
-                if req.cookies.get("litnav") != token:
+                if req.cookies.get(cookie) != token:
                     return await PlainTextResponse("no session: reload the page", 401)(scope, receive, send)
                 if req.method != "GET":
                     if req.headers.get("x-litnav-token") != token or \
@@ -100,7 +113,6 @@ def create_app(lib: Library, port: int, token: str | None = None):
                                         "Content-Security-Policy":
                                             "default-src 'self'; img-src 'self' data:; "
                                             "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"})
-        r.set_cookie("litnav", token, httponly=True, samesite="strict")
         return r
 
     async def items(request):
@@ -342,9 +354,10 @@ def serve(library=None, port: int = 8765, browser: bool = True):
     if not index.db_path(lib).exists():
         print("building the index first (keyword only; `litnav index` adds embeddings) ...")
         index.update(lib)
-    app = create_app(lib, port)
-    url = f"http://127.0.0.1:{port}/"
-    print(f"litnav: {url}  (Ctrl-C to stop)")
+    key = secrets.token_urlsafe(24)
+    app = create_app(lib, port, key=key)
+    url = f"http://127.0.0.1:{port}/?key={key}"
+    print(f"litnav: {url}  (Ctrl-C to stop)", flush=True)
     if browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

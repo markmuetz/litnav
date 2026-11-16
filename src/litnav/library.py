@@ -129,6 +129,13 @@ class Item:
         if not tag or "," in tag or re.search(r"\s", tag):
             raise ValueError(f"bad tag {tag!r}: no spaces or commas")
         t = self.meta.setdefault("tags", [])
+        if tag.casefold() == "confidential" and self.meta.get("sharing") != "confidential":
+            # the litman habit: tagging a draft confidential must protect it
+            self.meta["sharing"] = "confidential"
+            if tag not in t:
+                t.append(tag)
+            self.save_meta()
+            return
         if tag not in t:
             t.append(tag)
             self.save_meta()
@@ -166,11 +173,13 @@ class Library:
         self._aliases: dict[str, str] | None = None
         self._fold: dict[str, str] | None = None
         self._seen: int | None = None      # papers/ mtime when the caches were built
+        self._cfg_stamp = self._config_stamp()
         # The owner's answer at `init`: may licensed papers' text go to a model?
         self.licensed_to_models = bool(self.config["library"].get("licensed_to_models", True))
 
     def purpose(self, purpose: str) -> str:
         """Map a purpose through this library's policy (see sharing.effective)."""
+        self.reload_config()
         return S.effective(purpose, self.licensed_to_models)
 
     @classmethod
@@ -223,6 +232,24 @@ class Library:
 
     def invalidate(self):
         self._aliases = self._fold = None
+
+    def _config_stamp(self):
+        out = []
+        for f in (self.root / config.CONFIG_NAME, self.state_dir / "local.toml"):
+            try:
+                out.append(f.stat().st_mtime_ns)
+            except FileNotFoundError:
+                out.append(None)
+        return tuple(out)
+
+    def reload_config(self) -> None:
+        """Re-read library.toml if it changed (long-lived processes)."""
+        st = self._config_stamp()
+        if st != self._cfg_stamp:
+            self._cfg_stamp = st
+            self.config = config.load(self.root)
+            self.pdf_dir = config.pdf_dir(self.root, self.config)
+            self.licensed_to_models = bool(self.config["library"].get("licensed_to_models", True))
 
     def _fresh(self) -> None:
         """Drop the key and alias caches if papers/ changed (an import or rename

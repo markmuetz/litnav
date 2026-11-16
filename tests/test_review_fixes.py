@@ -37,14 +37,26 @@ def test_matrix_cache_shared_and_invalidated(ilib):
     embed._CACHE.clear()
     a = embed.matrix(index.connect(ilib, readonly=True), model)
     b = embed.matrix(index.connect(ilib, readonly=True), model)
-    assert a is b and len(embed._CACHE) == 1
+    assert a[3] is b[3] and len(embed._CACHE) == 1
     i = a[1].index("smith2021cold")
     assert a[2][i] == "licensed"
     ilib.get("smith2021cold").set_sharing("private")
     index.update(ilib, keys_=["smith2021cold"], log=lambda *x: None)
     c = embed.matrix(index.connect(ilib, readonly=True), model)
-    assert c is not a and len(embed._CACHE) == 1
+    # same passages, so the cached vectors are reused (no 90 MB rebuild for a
+    # sharing or tag change) ...
+    assert c[3] is a[3] and len(embed._CACHE) == 1
+    # ... but the sharing levels are current
     assert {c[2][j] for j, k in enumerate(c[1]) if k == "smith2021cold"} == {"private"}
+    # new text means new passages: the cache is rebuilt
+    it = ilib.get("jones2019gravity")
+    t = it.text()
+    assert "Gravity waves radiate" in t
+    it.text_path.write_text(t.replace("Gravity waves radiate", "Gravity waves often radiate", 1))
+    index.update(ilib, log=lambda *x: None)
+    with index.writer(ilib) as con:
+        embed.update(ilib, con, fe, log=lambda *a: None)
+    assert embed.matrix(index.connect(ilib, readonly=True), model)[3] is not a[3]
 
 
 def test_reindex_keeps_vector_hash(ilib):
@@ -69,12 +81,15 @@ def test_resolve_sees_items_added_elsewhere(ilib):
 
 
 def test_reader_reopens_after_rebuild(ilib):
-    """R5: the shared read connection follows `index --rebuild`."""
+    """R5: `index --rebuild` works in place, so an open reader stays valid
+    and stored vectors are kept."""
     r = index.Reader(ilib)
     c1 = r()
+    with index.writer(ilib) as con:
+        con.execute("INSERT INTO vectors VALUES ('h', 'm', 1, x'00000000')")
     index.update(ilib, rebuild=True, log=lambda *a: None)
-    c2 = r()
-    assert c2 is not c1 and c2.execute("SELECT count(*) FROM items").fetchone()[0] == 3
+    assert r() is c1 and c1.execute("SELECT count(*) FROM items").fetchone()[0] == 3
+    assert c1.execute("SELECT count(*) FROM vectors").fetchone()[0] == 1
 
 
 def test_quiz_concept_slug_checked(ilib):
@@ -137,3 +152,41 @@ def test_related_papers_skips_stale_keys(ilib):
         con.execute("INSERT INTO edges VALUES ('smith2021cold', 'jones2019gravity')")
     r = Tools(ilib, purpose=S.SEND_OUT, embedder=None).related_papers("smith2021cold", "cites")
     assert r["cites"] == ["jones2019gravity"]
+
+
+def test_confidential_dir_spellings_and_tag(lib):
+    """M4: `_inbox/confidential/` counts; tagging `confidential` sets the level."""
+    from conftest import BIB
+    from litnav import importer
+    for d in ("confidential", "_Confidential"):
+        f = lib.inbox / d / "x.pdf"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"%PDF-1.4")
+    assert {t for _, t in importer.inbox_files(lib)} == {importer.CONFIDENTIAL_DIR}
+    it = lib.create_item("a2020x", BIB)
+    it.add_tag("confidential")
+    assert lib.get("a2020x").sharing == "confidential"
+
+
+def test_config_reloaded(ilib):
+    """M3: a long-lived Library follows library.toml."""
+    import os
+    import time
+    assert ilib.licensed_to_models
+    p = ilib.root / "library.toml"
+    p.write_text(p.read_text().replace("licensed_to_models = true", "licensed_to_models = false"))
+    os.utime(p, ns=(time.time_ns() + 10**9,) * 2)
+    t = Tools(ilib, purpose=S.SEND_OUT, embedder=None)
+    assert "smith2021cold" not in {h["key"] for h in t.search_literature("cold pools", k=50, mode="keyword")}
+
+
+def test_rename_reads_notes_first(lib):
+    """M5: a note with a non-UTF-8 byte is rewritten byte-exactly."""
+    from conftest import BIB
+    from litnav import rename
+    lib.create_item("a2020x", BIB)
+    n = lib.root / "notes" / "x.md"
+    n.parent.mkdir(exist_ok=True)
+    n.write_bytes(b"See [@a2020x] \xff here.\n")
+    rename.apply(lib, rename.plan(lib, "a2020x", "b2020y"))
+    assert n.read_bytes() == b"See [@b2020y] \xff here.\n"

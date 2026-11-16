@@ -47,6 +47,11 @@ def apply(lib, p: dict) -> None:
     for src, dst in p["files"]:
         if dst.exists():
             raise FileExistsError(dst)
+    # read (and rewrite in memory) every note first: a failure here must not
+    # leave the item moved and the notes still citing the old key
+    # (surrogateescape: a stray non-UTF-8 byte is written back unchanged)
+    rewritten = [(f, refs.rewrite(f.read_bytes().decode("utf-8", "surrogateescape"), old, new)[0]
+                  .encode("utf-8", "surrogateescape")) for f, _ in p["notes"]]
     newdir = lib.papers_dir / new
     if old.casefold() == new.casefold():
         tmp = lib.papers_dir / f".{old}.renaming"
@@ -67,8 +72,7 @@ def apply(lib, p: dict) -> None:
         al.append(old)
     n.meta["aliases"] = [a for a in al if a.casefold() != new.casefold()]
     n.save_meta()
-    for f, _ in p["notes"]:
-        t, _n = refs.rewrite(f.read_text("utf-8"), old, new)
+    for f, t in rewritten:
         atomic_write(f, t)
     for name in p["projects"]:
         rows = projects.load(lib, name)

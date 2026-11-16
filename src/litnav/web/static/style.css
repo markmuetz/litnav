@@ -54,3 +54,4 @@ pre { white-space: pre-wrap; background: var(--surface-2); padding: .6rem; borde
 #ask-log .err { color: var(--bad); }
 .card { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; margin-bottom: .5rem; }
 .card button { margin-right: .3rem; }
+.md .url { color: #888; font-size: 0.85em; word-break: break-all; }

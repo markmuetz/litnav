@@ -17,6 +17,21 @@ items get `default_sharing`, `licensed` unless you change it):
 | `confidential` | never read by tools, never sent anywhere | co-authored drafts, manuscripts under review |
 
 An unknown level (a typo in `meta.toml`) is treated as `confidential`.
+Tagging an item `confidential` (the old litman habit) also sets the level.
+`_inbox/_confidential/` may also be spelt `confidential/` (any case).
+
+**Automatic `open`.** `litnav graph` makes an item `open` only if OpenAlex
+reports a Creative Commons licence on the *publisher's* version (not a
+repository or preprint copy), the item's level was never set by hand, and
+the library default leaves it `licensed`. It records
+`files.sharing_source = "openalex-cc"`, so you can tell it from your own
+choice.
+
+**Making an item confidential later** hides it at once (`litnav share`
+reindexes it, and the model-facing tools re-check `meta.toml` on every
+result), but does not delete what already exists: `text.txt`,
+`summary.json` and earlier git history stay on your disk. Delete them by
+hand if they must go.
 
 # Purposes and the table
 
@@ -32,6 +47,8 @@ Code never checks a level directly; it states a **purpose** and asks
 - `send_out_strict`: the same, in a library with `licensed_to_models =
   false` (asked once by `litnav init`). `Library.purpose()` maps
   `send_out` to it; callers never pass it themselves.
+- Changes to `library.toml` (e.g. `licensed_to_models`) are picked up by a
+  running web app or MCP server without a restart.
 - `serve_meta` / `serve_text`: serving to someone other than you (reserved for
   a future shared server; nothing uses them yet).
 

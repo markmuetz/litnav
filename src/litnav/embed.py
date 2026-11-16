@@ -76,20 +76,24 @@ def update(lib, con, embedder, *, limit: int | None = None, log=print) -> dict:
     # embedded locally: embedding is local computation, nothing leaves.
     rows = con.execute("SELECT id, key, header, text, vhash FROM chunks").fetchall()
     have = {r[0] for r in con.execute("SELECT vhash FROM vectors WHERE model=?", (model,))}
-    todo = []
+    todo, changed = [], False
     for r in rows:
         h = vhash(model, chunk_text(r))
         if r["vhash"] != h:
             con.execute("UPDATE chunks SET vhash=? WHERE id=?", (h, r["id"]))
+            changed = True
         if h not in have:
             todo.append((h, chunk_text(r)))
             have.add(h)
+    pv = dict(con.execute("SELECT key, vhash FROM paper_vectors").fetchall())
     for k in [r[0] for r in con.execute("SELECT key FROM items")]:
         t = paper_text(con, k)
         if not t:
             continue
         h = vhash(model, t)
-        con.execute("INSERT OR REPLACE INTO paper_vectors VALUES (?,?)", (k, h))
+        if pv.get(k) != h:
+            con.execute("INSERT OR REPLACE INTO paper_vectors VALUES (?,?)", (k, h))
+            changed = True
         if h not in have:
             todo.append((h, t))
             have.add(h)
@@ -109,19 +113,21 @@ def update(lib, con, embedder, *, limit: int | None = None, log=print) -> dict:
         rate = done / max(1e-6, time.time() - t0)
         log(f"  embedded {done}/{len(todo)}  ({rate:.0f}/s, ~{(len(todo) - done) / max(rate, 1e-6) / 60:.0f} min left)")
     stats["chunks"] = len(todo) - stats["papers"]
-    from .index import bump
-    bump(con)
-    con.commit()
+    if changed or todo:
+        from .index import bump
+        bump(con)
+        con.commit()
     return stats
 
 
 _CACHE: dict = {}
+_LOCK = __import__("threading").Lock()
 
 
 def matrix(con, model: str, what: str = "chunks"):
-    """(ids, keys, sharing, normalised matrix) for chunks or papers, cached
-    per connection until the vectors table changes."""
-    import numpy as np
+    """(ids, keys, sharing, normalised matrix) for chunks or papers. The ids
+    and vectors are cached per index file until the index generation or the
+    vector count changes; the sharing levels are read on every call."""
     from .index import generation
     path = con.execute("PRAGMA database_list").fetchone()[2]
     try:
@@ -130,24 +136,32 @@ def matrix(con, model: str, what: str = "chunks"):
         ino = None
     n = con.execute("SELECT count(*) FROM vectors WHERE model=?", (model,)).fetchone()[0]
     ck, fp = (path, model, what), (ino, generation(con), n)
-    hit = _CACHE.get(ck)
-    if hit and hit[0] == fp:
-        return hit[1]
+    with _LOCK:
+        hit = _CACHE.get(ck)
+        if not (hit and hit[0] == fp):
+            hit = (fp, _build(con, model, what))
+            _CACHE[ck] = hit            # one entry per index file, model and kind
+    ids, keys_, m = hit[1]
+    # sharing is read fresh for every query, never cached: a level changed a
+    # moment ago applies to this search
+    lv = dict(con.execute("SELECT key, sharing FROM items").fetchall())
+    return ids, keys_, [lv.get(k, "confidential") for k in keys_], m
+
+
+def _build(con, model, what):
+    import numpy as np
     if what == "chunks":
-        q = ("SELECT c.id, c.key, c.sharing, v.vec FROM chunks c JOIN vectors v "
+        q = ("SELECT c.id, c.key, v.vec FROM chunks c JOIN vectors v "
              "ON v.vhash=c.vhash AND v.model=?")
     else:
-        q = ("SELECT p.key, p.key, i.sharing, v.vec FROM paper_vectors p JOIN vectors v "
+        q = ("SELECT p.key, p.key, v.vec FROM paper_vectors p JOIN vectors v "
              "ON v.vhash=p.vhash AND v.model=? JOIN items i ON i.key=p.key")
     rows = con.execute(q, (model,)).fetchall()
     if not rows:
-        res = ([], [], [], np.zeros((0, 1), dtype="float32"))
-    else:
-        m = np.frombuffer(b"".join(r[3] for r in rows), dtype="float32").reshape(len(rows), -1)
-        m = m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
-        res = ([r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows], m)
-    _CACHE[ck] = (fp, res)          # one entry per index file, model and kind
-    return res
+        return [], [], np.zeros((0, 1), dtype="float32")
+    m = np.frombuffer(b"".join(r[2] for r in rows), dtype="float32").reshape(len(rows), -1)
+    m = m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
+    return [r[0] for r in rows], [r[1] for r in rows], m
 
 
 def allowed_mask(sharing_levels, purpose):
