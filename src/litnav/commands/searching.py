@@ -20,6 +20,8 @@ def add(sub):
     p.add_argument("--tag", "-t")
     p.add_argument("--author", "-a")
     p.add_argument("--project", "-p")
+    p.add_argument("--notes", nargs="?", const="all", choices=["all", "note", "concept", "topic"],
+                   help="search your own notes, concepts and topic notes instead of papers")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_search)
 
@@ -73,6 +75,24 @@ def cmd_search(a):
     emb = None if a.mode == "keyword" else embedder_for(lib)
     if emb is None and a.mode != "keyword":
         print("(keyword only: no embeddings yet; run `litnav index`)", file=sys.stderr)
+    if a.notes:
+        try:
+            res = search.notes(con, a.query, embedder=emb, k=a.k,
+                               kinds=(a.notes,) if a.notes != "all" else ("note", "concept", "topic"))
+        except Exception as e:
+            if "no such table" in str(e):
+                raise ValueError("notes are not indexed yet: run `litnav index`")
+            raise
+        if a.json:
+            print(json.dumps(res, indent=1))
+            return
+        for r in res:
+            print(f"{r['path']}  {r['title'][:60]}" + (f" § {r['section']}" if r["section"] else "")
+                  + (f"  (on [@{r['about']}])" if r["about"] else ""))
+            print(f"  id: {r['id']}")
+            print(textwrap.indent(textwrap.fill(r["text"][:500], 100), "    "))
+            print()
+        return
     f = filters_from(a, lib)
     if a.papers:
         res = search.papers(con, a.query, embedder=emb, k=a.k, filters=f)

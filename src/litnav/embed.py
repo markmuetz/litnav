@@ -3,7 +3,8 @@
 Vectors live in the index's `vectors` table as float32 BLOBs keyed by a hash
 of (model, embedded text), so only changed text is ever re-embedded, and a
 run can be interrupted and resumed. Chunks are embedded as header + text;
-papers as title + summary (or title + abstract + first chunk without one).
+papers as title + summary (or title + abstract + first chunk without one);
+the user's note passages as header + text.
 """
 from __future__ import annotations
 
@@ -85,6 +86,14 @@ def update(lib, con, embedder, *, limit: int | None = None, log=print) -> dict:
         if h not in have:
             todo.append((h, chunk_text(r)))
             have.add(h)
+    for r in con.execute("SELECT id, header, text, vhash FROM notes").fetchall():
+        h = vhash(model, chunk_text(r))
+        if r["vhash"] != h:
+            con.execute("UPDATE notes SET vhash=? WHERE id=?", (h, r["id"]))
+            changed = True
+        if h not in have:
+            todo.append((h, chunk_text(r)))
+            have.add(h)
     pv = dict(con.execute("SELECT key, vhash FROM paper_vectors").fetchall())
     for k in [r[0] for r in con.execute("SELECT key FROM items")]:
         t = paper_text(con, k)
@@ -144,6 +153,9 @@ def matrix(con, model: str, what: str = "chunks"):
     ids, keys_, m = hit[1]
     # sharing is read fresh for every query, never cached: a level changed a
     # moment ago applies to this search
+    if what == "notes":
+        lv = dict(con.execute("SELECT id, sharing FROM notes").fetchall())
+        return ids, keys_, [lv.get(i, "confidential") for i in ids], m
     lv = dict(con.execute("SELECT key, sharing FROM items").fetchall())
     return ids, keys_, [lv.get(k, "confidential") for k in keys_], m
 
@@ -153,6 +165,9 @@ def _build(con, model, what):
     if what == "chunks":
         q = ("SELECT c.id, c.key, v.vec FROM chunks c JOIN vectors v "
              "ON v.vhash=c.vhash AND v.model=?")
+    elif what == "notes":
+        q = ("SELECT n.id, n.path, v.vec FROM notes n JOIN vectors v "
+             "ON v.vhash=n.vhash AND v.model=?")
     else:
         q = ("SELECT p.key, p.key, v.vec FROM paper_vectors p JOIN vectors v "
              "ON v.vhash=p.vhash AND v.model=? JOIN items i ON i.key=p.key")

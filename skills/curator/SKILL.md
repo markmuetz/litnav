@@ -10,12 +10,15 @@ description: Keep a litnav library clean — import PDFs from the inbox, verify 
 | | |
 |---|---|
 | `litnav import [paths] [--apply]` | import PDFs (default: everything in `<pdf_dir>/_inbox/`); dry run unless `--apply` |
+| `litnav import --from-downloads [HOURS]` | list PDFs downloaded in the last HOURS (default 2), identical re-downloads skipped; nothing is looked up until `--apply` |
 | `litnav import-bib <file.bib>` | import from Zotero/JabRef/Mendeley exports |
 | `litnav check` | keys, implausible years, missing bibs and DOIs |
 | `litnav normalise [keys]` | bring `ref.bib` into house style (idempotent) |
 | `litnav rename <old> <new>` | rename; the old key stays as an alias, `[@old]` still resolves |
 | `litnav tag add\|rm <tag> <keys>`, `litnav share <level> <keys>` | tags, sharing |
 | `litnav fetch <keys or DOIs>` | open DOIs in the browser for the user to download |
+| `litnav project list\|show\|add\|rm\|set` | project membership, status, project tags and notes (`projects/<P>/papers.toml`) |
+| `litnav draft version <key> <pdf> [--received D] [--label L] [--apply]` | file a new version of a co-authored draft: old PDF to `_variants/`, row in `curation/drafts.tsv`; never opens the PDF |
 | `litnav extract`, `litnav index` | text for PDFs that lack it; update the search index |
 | `litnav summarize [keys] [--dry-run]` | summaries (Haiku); `--via claude-code` without an API key |
 | `litnav themes --update` | fold new papers into `derived/themes.md`, keeping existing themes |
@@ -24,6 +27,11 @@ description: Keep a litnav library clean — import PDFs from the inbox, verify 
 
 - **Dry run first.** Show the plan from `litnav import` and let the user
   confirm before `--apply`. Unverified matches are reported, never applied.
+- **From Downloads**: show the list from `litnav import --from-downloads`
+  and check, with the user, that none is a co-authored draft, a manuscript
+  under review or a student's work before `--apply`: the plan sends each
+  file's opening lines to Crossref. Names containing draft, manuscript,
+  review and similar words are skipped automatically.
 - **Keys**: `<surname><year><firstcontentword>`, surname folded to ASCII,
   year of the issue (not online-first), leading function words skipped.
   Suffixes are part of the convention: a digit for Part I/II, `_preprint`,

@@ -9,6 +9,9 @@ Tables
   chunks_fts  FTS5 over chunk header + text
   vectors     embedding BLOBs keyed by hash(model, embedded text)
   edges       citation edges (src key -> dst key), from the graph step
+  notes       passages of the user's notes/, concepts/, topics/ (notes.py),
+              with each file's sharing level
+  notes_fts   FTS5 over note passage header + text
   state       schema/chunker versions
 
 Updates are incremental: an item is re-indexed only when its signature
@@ -50,6 +53,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 CREATE TABLE IF NOT EXISTS vectors (vhash TEXT PRIMARY KEY, model TEXT, dim INTEGER, vec BLOB);
 CREATE TABLE IF NOT EXISTS paper_vectors (key TEXT PRIMARY KEY, vhash TEXT);
 CREATE TABLE IF NOT EXISTS edges (src TEXT, dst TEXT, PRIMARY KEY (src, dst));
+CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY, path TEXT, kind TEXT, about TEXT, title TEXT, section TEXT, ord INTEGER,
+    text TEXT, header TEXT, sharing TEXT, vhash TEXT);
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+    id UNINDEXED, path UNINDEXED, header, text, tokenize = 'unicode61 remove_diacritics 2');
 """
 
 
@@ -195,7 +203,7 @@ def update(lib, *, rebuild: bool = False, keys_=None, log=print) -> dict:
         # of their text) are kept, so nothing unchanged is embedded again.
         with writer(lib) as con:
             for t in ("items", "items_fts", "sections", "chunks", "chunks_fts", "paper_vectors",
-                      "backlinks"):
+                      "notes", "notes_fts", "backlinks"):
                 con.execute(f"DROP TABLE IF EXISTS {t}")
             con.execute("DELETE FROM state WHERE k='chunker'")
         with writer(lib) as con:
@@ -224,9 +232,36 @@ def update(lib, *, rebuild: bool = False, keys_=None, log=print) -> dict:
                 log(f"  indexed {n}/{len(todo)}")
                 con.commit()
         con.execute("INSERT OR REPLACE INTO state VALUES ('chunker', ?)", (str(C.VERSION),))
+        if index_notes(con, lib):
+            stats["vectors_changed"] = True
+        stats["notes"] = con.execute("SELECT count(*) FROM notes").fetchone()[0]
         if stats.pop("vectors_changed", False) or stats["removed"]:
             bump(con)                    # the set of embedded passages changed
     return stats
+
+
+def index_notes(con, lib) -> bool:
+    """Re-index every note (a few hundred files at most, so all of them each
+    time: a note's level depends on the items it cites, which change without
+    the note changing). True if the set of passages changed."""
+    from . import notes as N
+    from .embed import vhash
+    model = lib.config["search"]["embedding_model"]
+    before = con.execute("SELECT group_concat(vhash || sharing, ',') FROM "
+                         "(SELECT vhash, sharing FROM notes ORDER BY id)").fetchone()[0]
+    con.execute("DELETE FROM notes")
+    con.execute("DELETE FROM notes_fts")
+    for f in N.files(lib):
+        text = f.read_text("utf-8", "replace")
+        lv = N.level(lib, N.rel(lib, f), text)
+        for p in N.passages(lib, f, text):
+            con.execute("INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
+                p.id, p.path, p.kind, p.about, p.title, p.section, p.ord, p.text, p.header, lv,
+                vhash(model, f"{p.header}\n{p.text}")))
+            con.execute("INSERT INTO notes_fts VALUES (?,?,?,?)", (p.id, p.path, p.header, p.text))
+    after = con.execute("SELECT group_concat(vhash || sharing, ',') FROM "
+                        "(SELECT vhash, sharing FROM notes ORDER BY id)").fetchone()[0]
+    return before != after
 
 
 def section_text(con, key: str, slug: str, lib) -> tuple[dict, str] | None:

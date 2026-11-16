@@ -237,3 +237,50 @@ def similar(con, key: str, embedder_name: str, *, k: int = 10, purpose: str = SH
         d["score"] = round(float(sims[j]), 4)
         out.append(d)
     return out
+
+
+def notes(con, q: str, *, embedder=None, k: int = 10, purpose: str = SH.LOCAL,
+          kinds: tuple = ("note", "concept", "topic")) -> list[dict]:
+    """Search the user's own notes (notes/, concepts/, topics/): keyword and,
+    with an embedder, semantic, fused by reciprocal rank. Only passages whose
+    note's level allows `purpose`."""
+    lv = _allowed_levels(purpose)
+    cols = "n.id, n.path, n.kind, n.about, n.title, n.section, n.text"
+    where = (f"n.sharing IN ({','.join('?' * len(lv))}) "
+             f"AND n.kind IN ({','.join('?' * len(kinds))})")
+    score, rows = {}, {}
+
+    def add(lst):
+        for rank, r in enumerate(lst):
+            score[r["id"]] = score.get(r["id"], 0) + 1 / (RRF_K + rank + 1)
+            rows.setdefault(r["id"], dict(r))
+    phrases, _ = parse_query(q)
+    fq = fts_query(q)
+    if fq:
+        add(con.execute(
+            f"SELECT {cols} FROM notes n JOIN (SELECT id, bm25(notes_fts, 0, 0, 2.0, 1.0) AS s "
+            f"FROM notes_fts WHERE notes_fts MATCH ?) m ON m.id=n.id WHERE {where} "
+            f"ORDER BY m.s LIMIT ?", [fq, *lv, *kinds, POOL]).fetchall())
+    if embedder is not None:
+        import numpy as np
+        from . import embed
+        ids, _, nlv, m = embed.matrix(con, embedder.name, "notes")
+        if ids:
+            qv = embedder.query(re.sub(r'"', "", q))
+            sims = m @ (qv / max(float(np.linalg.norm(qv)), 1e-9))
+            sims = np.where(embed.allowed_mask(nlv, purpose), sims, -np.inf)
+            top = [ids[j] for j in np.argsort(-sims)[:POOL] if np.isfinite(sims[j])]
+            if top:
+                got = {r["id"]: r for r in con.execute(
+                    f"SELECT {cols} FROM notes n WHERE n.id IN ({','.join('?' * len(top))}) "
+                    f"AND {where}", [*top, *lv, *kinds])}
+                sem = [got[i] for i in top if i in got]
+                if phrases:
+                    sem = [r for r in sem if _phrases_ok(r["text"], phrases)]
+                add(sem)
+    out = []
+    for i in sorted(score, key=lambda x: -score[x])[:k]:
+        r = rows[i]
+        r["score"] = round(score[i], 5)
+        out.append(r)
+    return out

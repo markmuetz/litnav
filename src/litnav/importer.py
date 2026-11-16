@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import re
 import shutil
 from dataclasses import asdict, fields
 from pathlib import Path
@@ -243,3 +244,36 @@ def _free(p: Path) -> Path:
         if not q.exists():
             return q
     raise FileExistsError(p)
+
+
+SENSITIVE = re.compile(r"draft|manuscript|review|submission|revis|confidential|thesis|dissertation",
+                       re.I)
+
+
+def downloads(lib, *, since_hours: float = 2.0, folder: Path | None = None,
+              log=print) -> list[Path]:
+    """Recent PDFs in the downloads folder, one per paper: a browser's
+    re-download (`name-2.pdf`, `name (1).pdf`) that is byte-identical to
+    another file is skipped. Files are compared, never read as documents."""
+    import filecmp
+    import time
+    folder = folder or Path(lib.config["import"].get("downloads_dir") or "~/Downloads").expanduser()
+    if not folder.is_dir():
+        raise ValueError(f"no downloads folder {folder}")
+    cutoff = time.time() - since_hours * 3600
+    pdfs = sorted((p for p in folder.iterdir()
+                   if p.is_file() and p.suffix.lower() == ".pdf" and p.stat().st_mtime >= cutoff),
+                  key=lambda p: (len(p.name), p.name))     # `x.pdf` before `x-2.pdf`
+    keep: list[Path] = []
+    for p in pdfs:
+        if SENSITIVE.search(p.stem):
+            log(f"  {p.name}: name suggests a draft, manuscript or review; skipped "
+                "(import it by name if it is a published paper)")
+            continue
+        same = next((q for q in keep if q.stat().st_size == p.stat().st_size
+                     and filecmp.cmp(q, p, shallow=False)), None)
+        if same:
+            log(f"  {p.name}: same file as {same.name}; skipped")
+        else:
+            keep.append(p)
+    return sorted(keep, key=lambda p: p.stat().st_mtime)

@@ -46,8 +46,9 @@ including summaries, discovery and a Zotero export.
 
 The repo is a Claude Code plugin: an MCP server with read-only tools
 (`search_literature`, `get_section`, `get_paper`, `related_papers`, ...) and
-four skills: **researcher** (answers with evidence), **reader** (reading
-list, quizzes, recall, and `/litnav:discuss <key>` to talk a paper through), **curator** (imports, keys, metadata) and
+five skills: **researcher** (answers with evidence), **synthesis** (topic
+notes: syntheses, prior-art checks, reading lists), **reader** (reading
+list, quizzes, recall, and `/litnav:discuss <key>` to talk a paper through), **curator** (imports, keys, metadata, projects, drafts) and
 **explorer** (discovery, the to-fetch list).
 
 ```sh

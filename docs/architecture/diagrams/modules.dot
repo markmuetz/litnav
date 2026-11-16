@@ -8,6 +8,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "config" [fillcolor="#FFF4D6"];
  "derived" [fillcolor="#EEEEEE"];
  "discovery" [fillcolor="#EEEEEE"];
+ "drafts" [fillcolor="#FFF4D6"];
  "embed" [fillcolor="#DCEBFA"];
  "evaluate" [fillcolor="#EEEEEE"];
  "extract" [fillcolor="#EEEEEE"];
@@ -23,6 +24,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "mcp_server" [fillcolor="#DFF3E3"];
  "meta" [fillcolor="#FFF4D6"];
  "net" [fillcolor="#F3E5F5"];
+ "notes" [fillcolor="#FFF4D6"];
  "projects" [fillcolor="#EEEEEE"];
  "quizzes" [fillcolor="#EEEEEE"];
  "reading" [fillcolor="#EEEEEE"];
@@ -50,6 +52,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "discovery" -> "net";
  "discovery" -> "sharing";
  "discovery" -> "util";
+ "drafts" -> "util";
  "embed" -> "index";
  "embed" -> "sharing";
  "evaluate" -> "chunks";
@@ -84,6 +87,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "index" -> "chunks";
  "index" -> "embed";
  "index" -> "keys";
+ "index" -> "notes";
  "index" -> "sections";
  "init" -> "config";
  "init" -> "util";
@@ -97,6 +101,8 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "mcp_server" -> "tools";
  "meta" -> "util";
  "net" -> "sharing";
+ "notes" -> "refs";
+ "notes" -> "sharing";
  "projects" -> "util";
  "quizzes" -> "util";
  "reading" -> "util";
@@ -115,6 +121,8 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "sources.crossref" -> "net";
  "sources.openalex" -> "net";
  "tools" -> "index";
+ "tools" -> "notes";
+ "tools" -> "projects";
  "tools" -> "reading";
  "tools" -> "refs";
  "tools" -> "search";

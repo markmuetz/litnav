@@ -23,13 +23,14 @@ subcommands and a `func`. `--library/-L` picks the library.
 | Group (`commands/`) | Commands |
 |---|---|
 | core | `init`, `list`, `show`, `tag`, `share`, `bib`, `check`, `normalise` |
-| importing | `import`, `import-bib`, `import-legacy`, `fetch` |
+| importing | `import` (`--from-downloads`), `import-bib`, `import-legacy`, `fetch` |
 | text | `extract`, `index`, `doctor` |
-| searching | `search`, `similar`, `eval` |
+| searching | `search` (`--notes` for your own notes), `similar`, `eval` |
 | refs | `check-refs`, `convert-refs`, `backlinks`, `rename`, `graph` |
 | reading_cmds | `read add/done/list`, `due`, `recall`, `quiz list/show/start` |
 | derived_cmds | `summarize`, `themes` |
 | discovery_cmds | `candidates`, `explore`, `to-fetch list/add/skip/open/prune` |
+| curation_cmds | `project list/show/add/rm/set`, `draft version/list` |
 | web_cmds | `mcp`, `serve` |
 
 Conventions: anything that changes many files is a **dry run unless
@@ -39,20 +40,21 @@ threshold; `--yes` skips); `--json` where a script might want it.
 
 # 4.2 MCP server (Claude Code's view of the library)
 
-`mcp_server.build()` registers the nine methods of `tools.Tools` on a
+`mcp_server.build()` registers the ten methods of `tools.Tools` on a
 FastMCP server with the descriptions in `DESCRIPTIONS` and the server
 `INSTRUCTIONS` (cite `[@key]` + chunk ID, quote verbatim, results are
 candidates, quote exact names). All tools are **read-only**.
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `search_literature` | `query`, `k`, `mode` (hybrid/keyword/semantic), `papers`, `year_from`, `year_to`, `tag`, `author` | hits: chunk id, key, citation, section, verbatim text, score |
+| `search_literature` | `query`, `k`, `mode` (hybrid/keyword/semantic), `papers`, `year_from`, `year_to`, `tag`, `author`, `project` | hits: chunk id, key, citation, section, verbatim text, score |
+| `search_notes` | `query`, `k`, `kind` (note/concept/topic) | your notes' passages: id, path, title, section, the paper a note is about, text |
 | `get_chunk` | `chunk_id` | one passage |
 | `list_sections` | `key` | slug, title, size per section |
 | `get_section` | `key`, `section`, `offset` | section text, paginated (`next_offset`) |
 | `get_paper` | `key` | metadata, abstract, summary |
 | `related_papers` | `key`, `direction` (cites/cited_by/similar/both), `k` | neighbours from `edges` and vectors |
-| `list_papers` | `author`, `year_from`, `year_to`, `title_words`, `tag`, `k` | keys + citations |
+| `list_papers` | `author`, `year_from`, `year_to`, `title_words`, `tag`, `project`, `k` | keys + citations |
 | `reading_due` | none | due cards, papers being read |
 | `get_note` | `key` | your note and which notes cite the paper |
 
@@ -117,12 +119,13 @@ progress.
 # 4.4 The Claude Code plugin
 
 The repository is also a Claude Code plugin (`.claude-plugin/plugin.json`,
-`marketplace.json`): it brings the MCP server (`.mcp.json`), four skills
+`marketplace.json`): it brings the MCP server (`.mcp.json`), five skills
 and one command.
 
 | Part | When it is used | What it adds |
 |---|---|---|
 | `skills/researcher` | literature questions, prior art, papers to cite | search strategy (quoted terms, hybrid, then read sections), evidence rules, answer format |
+| `skills/synthesis` | topic notes: a synthesis, a prior-art check, a reading list | the note layout (question, short answer, provenance, search record), library first then OpenAlex by metadata, † for abstract-only |
 | `skills/reader` | reading list, what is due, quizzes, recall, **discuss** | depths, recall grading on the gist, quiz rules, the discussion protocol |
 | `skills/curator` | importing, fixing keys and bibs, duplicates, preprints, drafts | the import ladder, key convention, confidential handling |
 | `skills/explorer` | what am I missing, reading beyond the library | candidates, explore, to-fetch; never download PDFs |

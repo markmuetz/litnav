@@ -37,12 +37,14 @@ safe filename and unique case-insensitively, including aliases.
 
 | Path | Format | Written by | Read by |
 |---|---|---|---|
-| `notes/<key>.md` | Markdown with `[@key]` citations | you | `get_note` tool, backlinks, `check-refs`, web Paper view |
-| `concepts/`, `topics/`, `glossary.md` | Markdown | you | backlinks; skills |
+| `notes/<key>.md` | Markdown with `[@key]` citations | you | `get_note` and `search_notes` tools, `search --notes`, backlinks, `check-refs`, web Paper view |
+| `concepts/`, `topics/` | Markdown; optional front matter `sharing: <level>` | you | `search_notes`, `search --notes`, backlinks; skills |
+| `glossary.md` | Markdown | you | skills |
 | `reading/list.toml` | `[[paper]]` key, depth, added, status, done, note | `read add/done`, web Reading tab | `read list`, `due`, `reading_due` tool |
 | `reading/recall.toml` | `[[card]]` id, box, last_reviewed, next_due, prompt | `read done`, `recall` | `due`, `reading_due` |
 | `quizzes/<key>.md` | dated sections: quiz table or discussion bullets | `quiz start` + you/Claude | `quiz show`, `/litnav:discuss` |
-| `projects/<P>/papers.toml` | `[[paper]]` key, status, tags, added, note | import from `_inbox/<P>/`, you | `--project` filters, `bib --project` |
+| `projects/<P>/papers.toml` | `[[paper]]` key, status, tags, added, note | import from `_inbox/<P>/`, `project add/rm/set`, you | `project show`, `--project` filters, `project` in MCP tools, `bib --project` |
+| `curation/drafts.tsv` | one row per co-authored draft version | `draft version`, you | `draft list`; you |
 | `discovery/to-fetch.tsv` | doi, title, first_author, year, source, added, status, note | `candidates --add`, `explore --add`, `to-fetch`, web Discovery | `to-fetch list/open`; pruned on import |
 | `derived/themes.md` | Markdown report with `[@key]` | `themes` | you; backlinks |
 | `eval/questions.toml` | questions with expected keys/passages | you | `eval` |
@@ -65,6 +67,11 @@ shows which notes cite it; `rename` rewrites them.
 - **Chunk IDs** are `key#section-slug#hash8`, the hash over the chunk's
   normalised text: re-chunking keeps the IDs of unchanged text, so IDs quoted
   in notes or answers stay valid.
+- **Notes** (`notes.py`): every file in `notes/`, `concepts/` and `topics/`
+  (not `_template.md`) is split at its headings into passages in `notes`
+  and `notes_fts`, IDs `<path>#<section>#hash8`, each with the file's
+  sharing level (doc 5). All notes are re-indexed on every `index`, since
+  a note's level depends on the papers it cites.
 - **Vectors** are keyed by `hash(model, embedded text)`, not by chunk ID.
   Duplicate texts share a vector; changing the model or the text creates a
   new one; nothing is embedded twice.
@@ -133,6 +140,9 @@ the `claude` subprocess are the two other exits, both behind
 | `themes` | `derived/themes.md` | no |
 | `graph` | `.litnav/graph.json`, `edges` table, `meta.toml` (`[ids] openalex`, CC licence) | no |
 | `tag`, `share`, `rename`, `normalise`, `convert-refs` | `meta.toml` / `ref.bib` / notes | no |
+| `project add/rm/set` | `projects/<P>/papers.toml` | no |
+| `draft version --apply` | moves `<pdf_dir>/<key>.pdf` to `_variants/`, the new PDF to `<key>.pdf`; `meta.toml` (`pdf_sha256`); `curation/drafts.tsv` | no |
+| `import --from-downloads --apply` | as `import --apply`; the files are moved out of `~/Downloads` | no |
 | `read`, `recall`, `quiz start` | `reading/*.toml`, `quizzes/<key>.md` | no |
 | `to-fetch`, `candidates --add`, `explore --add` | `discovery/to-fetch.tsv` | no |
 | `eval --save` | `eval/runs/<date>-<commit>.json` | no |

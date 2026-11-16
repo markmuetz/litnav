@@ -9,7 +9,7 @@ import sys
 from . import __version__
 
 COMMANDS = ["core", "importing", "text", "searching", "refs", "reading_cmds", "derived_cmds",
-            "discovery_cmds", "web_cmds"]
+            "discovery_cmds", "curation_cmds", "web_cmds"]
 
 
 def build_parser() -> argparse.ArgumentParser:

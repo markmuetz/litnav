@@ -74,9 +74,11 @@ class Tools:
 
     def search_literature(self, query: str, k: int = 10, mode: str = "hybrid", papers: bool = False,
                           year_from: int | None = None, year_to: int | None = None,
-                          tag: str | None = None, author: str | None = None) -> list[dict]:
+                          tag: str | None = None, author: str | None = None,
+                          project: str | None = None) -> list[dict]:
         k = max(1, min(int(k), MAX_K))
-        f = search.Filters(year_from=year_from, year_to=year_to, tag=tag, author=author)
+        f = search.Filters(year_from=year_from, year_to=year_to, tag=tag, author=author,
+                           keys=self._project_keys(project))
         purpose = S.SERVE_TEXT if self.purpose == S.SERVE_META and not papers else self.purpose
         if papers:
             return self._live(search.papers(self.con, query, embedder=self.embedder, k=k, filters=f,
@@ -86,6 +88,37 @@ class Tools:
         keep = ("id", "key", "title", "year", "authors", "section_title", "kind", "start", "end",
                 "text", "score")
         return [{x: r.get(x) for x in keep} for r in res]
+
+    def _project_keys(self, project):
+        if not project:
+            return None
+        from . import projects
+        return projects.project_keys(self.lib, project)
+
+    def search_notes(self, query: str, k: int = 10, kind: str | None = None) -> list[dict]:
+        """The user's own notes, concepts and topic notes. Each note's level is
+        re-derived from the file before it is returned (it may cite a paper
+        made confidential since the last `litnav index`)."""
+        if self.purpose in (S.SERVE_META, S.SERVE_TEXT):
+            raise PermissionError("notes are not served to others")
+        import sqlite3
+        from . import notes
+        k = max(1, min(int(k), MAX_K))
+        kinds = (kind,) if kind else ("note", "concept", "topic")
+        try:
+            res = search.notes(self.con, query, embedder=self.embedder, k=k * 2,
+                               purpose=self.purpose, kinds=kinds)
+        except sqlite3.OperationalError:
+            raise ValueError("notes are not indexed yet: run `litnav index`")
+        lv: dict[str, bool] = {}
+        out = []
+        for r in res:
+            if r["path"] not in lv:
+                lv[r["path"]] = S.allow(notes.level(self.lib, r["path"]), self.purpose)
+            if lv[r["path"]]:
+                out.append({x: r[x] for x in ("id", "path", "kind", "about", "title", "section",
+                                              "text", "score")})
+        return out[:k]
 
     def get_chunk(self, chunk_id: str) -> dict:
         key = chunk_id.split("#", 1)[0]
@@ -138,8 +171,11 @@ class Tools:
 
     def list_papers(self, author: str | None = None, year_from: int | None = None,
                     year_to: int | None = None, title_words: str | None = None,
-                    tag: str | None = None, k: int = 25) -> list[dict]:
+                    tag: str | None = None, project: str | None = None, k: int = 25) -> list[dict]:
         w, a = [], []
+        pk = self._project_keys(project)
+        if pk is not None:
+            w.append(f"key IN ({','.join('?' * len(pk)) or 'NULL'})"); a += pk
         if author:
             w.append("authors LIKE ?"); a.append(f"%{author}%")
         if year_from:
@@ -178,5 +214,5 @@ class Tools:
         return {"key": it.key, "note": p.read_text("utf-8") if p.is_file() else "", "cited_in": bl}
 
 
-TOOL_NAMES = ("search_literature", "get_chunk", "list_sections", "get_section", "get_paper",
+TOOL_NAMES = ("search_literature", "search_notes", "get_chunk", "list_sections", "get_section", "get_paper",
               "related_papers", "list_papers", "reading_due", "get_note")

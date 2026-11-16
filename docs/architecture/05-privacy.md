@@ -63,6 +63,9 @@ Code never checks a level directly; it states a **purpose** and asks
 | `Library.items(purpose)`, `Item.allowed(purpose)` | graph, discovery seeds, themes inputs | confidential (and other disallowed) items never enter the list |
 | `chunks.sharing` + `search` purpose filter | search, MCP tools, Ask | passages of disallowed items never returned; `embed.allowed_mask` does the same for vectors |
 | `Tools._live()` | MCP tools, Ask | re-checks every search result against the item's *current* `meta.toml`, in case the index's copy is stale |
+| `notes.level()` in `search_notes` | MCP tools, Ask | re-derives each note's level from the file before returning it |
+| `import --from-downloads` without `--apply` | CLI | lists files only: nothing is read or looked up until you have checked the list; names like *draft*, *manuscript*, *review* are skipped |
+| `draft version` | CLI | moves files and logs the version; never opens, extracts or looks up the PDF |
 | `Tools(purpose=send_out)` | MCP server, Ask | text of disallowed items; metadata still allowed when only the strict rule applies (`meta_purpose`) |
 | confidential import path | `importer` | `_inbox/_confidential/` files are never text-extracted or looked up |
 | `extract` | `extract.py` | never extracts text for confidential items |
@@ -85,11 +88,24 @@ Everything else (embeddings, OCR, search, the web app) runs locally.
 
 - **The library repo holds licensed text** (`text.txt`, if `track_text =
   true`). Push it only to a private remote.
-- **Notes are yours**: litnav never sends a note on its own. `get_note`
-  returns your note on a paper to the model when asked, and refuses for a
-  confidential item; but a note on paper A that *discusses* a confidential
-  draft B is still a note on A. Keep comments on confidential drafts in the
-  draft's own home.
+- **Notes are yours**, and searchable (`search_notes`, `search --notes`).
+  Each note file gets a level, re-derived whenever it is indexed or returned
+  to a model (`notes.level`):
+  1. front matter `sharing: <level>` wins: use `sharing: confidential` for a
+     note written for work that never enters the library (a manuscript you
+     referee, a student's work);
+  2. a note citing a confidential item (`[@key]` or a key in backticks) is
+     confidential;
+  3. `notes/<key>.md`: confidential if the paper is, otherwise private;
+  4. `notes/<name>.md` where `<name>` is not a library item: confidential;
+  5. concept and topic notes: private if `[notes] to_models = true` in
+     `library.toml`, otherwise confidential (the default: searchable on
+     your machine only).
+
+  Private notes can go to a model (Ask, MCP); confidential ones never do.
+  A note on paper A that discusses a confidential draft B without citing it
+  is still a note on A: keep comments on confidential drafts in the draft's
+  own home, or mark the note.
 - **A Claude Code session with Bash** can read any file you can. The MCP
   tools respect sharing; a general agent with shell access is governed by
   your Claude Code permissions and your CLAUDE.md, not by litnav.

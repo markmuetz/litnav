@@ -59,7 +59,11 @@ TOOL_DEFS = [
      "verbatim text.",
      _schema({"query": S_STR, "k": S_INT, "papers": S_BOOL, "mode": {"type": "string", "enum":
               ["hybrid", "keyword", "semantic"]}, "year_from": S_INT, "year_to": S_INT,
-              "tag": S_STR, "author": S_STR}, ["query"])),
+              "tag": S_STR, "author": S_STR, "project": S_STR}, ["query"])),
+    ("search_notes", "Search the researcher's own notes, concept notes and topic notes. Their "
+     "words, not the literature's: say so when you use them.",
+     _schema({"query": S_STR, "k": S_INT, "kind": {"type": "string", "enum":
+              ["note", "concept", "topic"]}}, ["query"])),
     ("get_chunk", "Fetch one passage by chunk id.", _schema({"chunk_id": S_STR}, ["chunk_id"])),
     ("list_sections", "List a paper's detected sections.", _schema({"key": S_STR}, ["key"])),
     ("get_section", "Read one section of a paper by slug (paginated with offset).",
@@ -68,9 +72,9 @@ TOOL_DEFS = [
     ("related_papers", "Citation neighbours of a paper: direction cites, cited_by, similar or both.",
      _schema({"key": S_STR, "direction": {"type": "string", "enum": ["cites", "cited_by", "similar", "both"]},
               "k": S_INT}, ["key"])),
-    ("list_papers", "Find papers by author, year range, title words or tag.",
+    ("list_papers", "Find papers by author, year range, title words, tag or project.",
      _schema({"author": S_STR, "year_from": S_INT, "year_to": S_INT, "title_words": S_STR,
-              "tag": S_STR, "k": S_INT})),
+              "tag": S_STR, "project": S_STR, "k": S_INT})),
     ("get_note", "The researcher's own notes on a paper.", _schema({"key": S_STR}, ["key"])),
 ]
 

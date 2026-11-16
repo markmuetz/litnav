@@ -37,6 +37,11 @@ DEFAULTS: dict = {
     "search": {
         "embedding_model": "BAAI/bge-small-en-v1.5",
     },
+    "notes": {
+        # May concept and topic notes (your own writing, not about one paper)
+        # go to a model (Ask, MCP)? Notes on a paper follow the paper's level.
+        "to_models": False,
+    },
     "ask": {
         "backend": "claude-code",      # "claude-code" or "api"
         "model": "claude-opus-5-5",

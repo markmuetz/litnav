@@ -78,4 +78,4 @@ Read it right to left for the foundations: `util`, `sharing`, `keys`, `config`, 
 
 # Tests
 
-`tests/` runs with `pytest` (122 tests, ~4 s): library and keys, bib normalisation, import and identification with recorded API responses, sections and chunks, index and search, the sharing gates (net refusal, outbound, MCP tools, search filters), derived routes with a fake `claude`, the web app's guard and endpoints, reading and recall dates, discovery, quizzes. CI runs them on Ubuntu, macOS and Windows with Python 3.11-3.13.
+`tests/` runs with `pytest` (133 tests, ~6 s): library and keys, bib normalisation, import and identification with recorded API responses, sections and chunks, index and search, the sharing gates (net refusal, outbound, MCP tools, search filters), derived routes with a fake `claude`, the web app's guard and endpoints, reading and recall dates, discovery, quizzes. CI runs them on Ubuntu, macOS and Windows with Python 3.11-3.13.

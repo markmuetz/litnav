@@ -19,6 +19,10 @@ def add(sub):
     p.add_argument("--confidential", action="store_true",
                    help="never read or look up these files; needs --key or a canonical filename")
     p.add_argument("--move", action="store_true", help="move files from outside the inbox (default: copy)")
+    p.add_argument("--from-downloads", nargs="?", const=2.0, type=float, metavar="HOURS",
+                   help="import PDFs downloaded in the last HOURS (default 2) from ~/Downloads "
+                        "(or [import] downloads_dir); identical re-downloads are skipped, and "
+                        "imported files are moved")
     p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("import-bib", help="import a .bib with file fields (Zotero, JabRef, Mendeley)")
@@ -49,7 +53,24 @@ def cmd_import(a):
         c = importer.apply(lib, rows, tags=a.tag, mode="move" if a.move else None)
         print(c, file=sys.stderr)
         return
-    if a.files:
+    if a.from_downloads is not None:
+        if a.files or a.confidential:
+            raise ValueError("--from-downloads takes no files and is never for confidential "
+                             "drafts (import those by hand into _inbox/_confidential/)")
+        files = [(p, "") for p in importer.downloads(
+            lib, since_hours=a.from_downloads, log=lambda m: print(m, file=sys.stderr))]
+        print(f"{len(files)} PDFs from the last {a.from_downloads:g} h:", file=sys.stderr)
+        for p, _ in files:
+            print(f"  {p.name}", file=sys.stderr)
+        if not a.apply:
+            # The plan step sends each file's opening lines to Crossref, so it
+            # waits until the list has been checked.
+            print("nothing looked up yet. Check none is a draft, a manuscript under review "
+                  "or a student's work, then --apply (or import the right files by name)",
+                  file=sys.stderr)
+            return
+        a.move = True
+    elif a.files:
         tag = importer.CONFIDENTIAL_DIR if a.confidential else ""
         files = [(Path(f).expanduser().resolve(), tag) for f in a.files]
         if (a.doi or a.key) and len(files) > 1:

@@ -15,13 +15,19 @@ The litnav MCP server (`mcp__litnav__*`), or the CLI if it is not connected:
 
 | MCP tool | CLI | use |
 |---|---|---|
-| `search_literature(query, k, mode, papers, year_from, year_to, tag, author)` | `litnav search "<q>" [--papers]` | find passages (or papers with `papers=true`) |
+| `search_literature(query, k, mode, papers, year_from, year_to, tag, author, project)` | `litnav search "<q>" [--papers] [--project P]` | find passages (or papers with `papers=true`) |
+| `search_notes(query, k, kind)` | `litnav search "<q>" --notes [note\|concept\|topic]` | the user's own notes, concepts and topic notes |
 | `get_chunk(chunk_id)` | | re-read one passage exactly |
 | `list_sections(key)`, `get_section(key, section, offset)` | | read a section, paginated |
 | `get_paper(key)` | `litnav show <key>` | metadata, summary, abstract |
 | `related_papers(key, direction)` | `litnav similar <key>` | cites, cited by, similar |
-| `list_papers(author, year_from, year_to, title_words, tag)` | `litnav list` | browse by metadata |
+| `list_papers(author, year_from, year_to, title_words, tag, project)` | `litnav list` | browse by metadata |
 | `get_note(key)` | | the user's own notes on a paper |
+
+The user's notes are their words, not the literature's: when you use one,
+say so ("your note on X says ..."), and check claims in it against the paper
+before repeating them as findings. For a written-up synthesis or a prior-art
+check to keep, use the synthesis skill.
 
 ## Method
 
