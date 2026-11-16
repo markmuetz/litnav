@@ -77,3 +77,17 @@ def test_semantic_notes(ilib):
     assert r[0]["path"] == "concepts/cre.md"
     assert all(x["path"] != "topics/review.md" for x in
                search.notes(con, "referee report", embedder=e, k=20, purpose=S.SEND_OUT))
+
+
+def test_setting_change_applies_without_reindex(ilib):
+    setup_notes(ilib, to_models=False)
+    t = Tools(ilib, purpose=S.SEND_OUT, embedder=None)
+    assert "topics/outflows.md" not in {r["path"] for r in t.search_notes("outflow boundaries", k=20)}
+    import os
+    import time
+    cfg = ilib.root / "library.toml"
+    cfg.write_text(cfg.read_text() + "\n[notes]\nto_models = true\n")
+    st = cfg.stat().st_mtime + 2
+    os.utime(cfg, (st, st))
+    assert "topics/outflows.md" in {r["path"] for r in t.search_notes("outflow boundaries", k=20)}
+    assert "topics/review.md" not in {r["path"] for r in t.search_notes("outflow boundaries", k=20)}

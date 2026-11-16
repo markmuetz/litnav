@@ -98,7 +98,8 @@ class Tools:
     def search_notes(self, query: str, k: int = 10, kind: str | None = None) -> list[dict]:
         """The user's own notes, concepts and topic notes. Each note's level is
         re-derived from the file before it is returned (it may cite a paper
-        made confidential since the last `litnav index`)."""
+        made confidential, or the owner changed `[notes] to_models`, since the
+        last `litnav index`)."""
         if self.purpose in (S.SERVE_META, S.SERVE_TEXT):
             raise PermissionError("notes are not served to others")
         import sqlite3
@@ -106,8 +107,11 @@ class Tools:
         k = max(1, min(int(k), MAX_K))
         kinds = (kind,) if kind else ("note", "concept", "topic")
         try:
-            res = search.notes(self.con, query, embedder=self.embedder, k=k * 2,
-                               purpose=self.purpose, kinds=kinds)
+            # all levels from the index, then each note's *current* level
+            # decides: a changed `[notes] to_models` or a newly confidential
+            # paper applies without waiting for `litnav index`
+            res = search.notes(self.con, query, embedder=self.embedder, k=k * 4,
+                               purpose=S.LOCAL, kinds=kinds)
         except sqlite3.OperationalError:
             raise ValueError("notes are not indexed yet: run `litnav index`")
         lv: dict[str, bool] = {}
