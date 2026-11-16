@@ -29,7 +29,10 @@ HEAD = re.compile(r"^## (\d{4}-\d\d-\d\d)(?:\s*\((.*)\))?\s*$", re.M)
 
 def path(lib, ident: str):
     if ident.startswith("concept:"):
-        return lib.root / "quizzes" / f"concept-{ident.split(':', 1)[1]}.md"
+        slug = ident.split(":", 1)[1]
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", slug):
+            raise ValueError(f"concept slug {slug!r}: use letters, digits, - and _")
+        return lib.root / "quizzes" / f"concept-{slug}.md"
     return lib.root / "quizzes" / f"{lib.get(ident).key}.md"
 
 

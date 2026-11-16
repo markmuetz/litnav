@@ -45,6 +45,7 @@ Code never checks a level directly; it states a **purpose** and asks
 | `derived.outbound(lib, items)` | summaries, themes | any model call if any selected item doesn't allow `lib.purpose(SEND_OUT)`; re-checked per paper during long runs and at batch collection |
 | `Library.items(purpose)`, `Item.allowed(purpose)` | graph, discovery seeds, themes inputs | confidential (and other disallowed) items never enter the list |
 | `chunks.sharing` + `search` purpose filter | search, MCP tools, Ask | passages of disallowed items never returned; `embed.allowed_mask` does the same for vectors |
+| `Tools._live()` | MCP tools, Ask | re-checks every search result against the item's *current* `meta.toml`, in case the index's copy is stale |
 | `Tools(purpose=send_out)` | MCP server, Ask | text of disallowed items; metadata still allowed when only the strict rule applies (`meta_purpose`) |
 | confidential import path | `importer` | `_inbox/_confidential/` files are never text-extracted or looked up |
 | `extract` | `extract.py` | never extracts text for confidential items |

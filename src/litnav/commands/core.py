@@ -114,8 +114,14 @@ def cmd_tag(a):
 
 def cmd_share(a):
     lib = Library.find(a.library)
-    for k in a.keys:
+    keys_ = [lib.get(k).key for k in a.keys]
+    for k in keys_:
         lib.get(k).set_sharing(a.level)
+    # the index keeps a copy of each level for search filtering: update it now,
+    # so a paper made confidential stops appearing in searches at once
+    from .. import index
+    if index.db_path(lib).exists():
+        index.update(lib, keys_=keys_, log=lambda *x: None)
 
 
 def select(lib, keys_=(), tag=None, project=None):

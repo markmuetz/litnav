@@ -15,11 +15,10 @@ digraph G {
   vec [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>vectors</B></TD></TR><TR><TD ALIGN="LEFT">vhash PK = hash(model, text)</TD></TR><TR><TD ALIGN="LEFT">model, dim, vec (float32 BLOB)</TD></TR></TABLE>>];
   pvec [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>paper_vectors</B></TD></TR><TR><TD ALIGN="LEFT">key PK, vhash</TD></TR></TABLE>>];
   edges [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>edges</B></TD></TR><TR><TD ALIGN="LEFT">(src, dst): src cites dst</TD></TR></TABLE>>];
-  bl [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>backlinks</B></TD></TR><TR><TD ALIGN="LEFT">(src note, dst key)</TD></TR></TABLE>>];
-  state [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>state</B></TD></TR><TR><TD ALIGN="LEFT">schema version</TD></TR></TABLE>>];
+  state [label=<<TABLE BORDER="1" CELLBORDER="0" BGCOLOR="#DCEBFA" COLOR="#3B78B8"><TR><TD><B>state</B></TD></TR><TR><TD ALIGN="LEFT">schema, chunker, gen</TD></TR></TABLE>>];
   files -> items [label="index_item()\nwhen sig changes"];
   items -> ifts; files -> secs [label="sections.parse()"]; secs -> chunks [label="chunks.chunk()"];
   chunks -> cfts; chunks -> vec [label="embed.update()\nheader+text"]; items -> pvec [label="title+summary"]; pvec -> vec;
   gr [label="litnav graph\n(OpenAlex)", shape=box, style="rounded,filled", fillcolor="#F3E5F5", color="#8E44AD", fontname="Helvetica"];
-  gr -> edges; notes [label="notes/*.md [@key]", shape=box, style="rounded,filled", fillcolor="#FFF4D6", color="#C9A227", fontname="Helvetica"]; notes -> bl;
+  gr -> edges;
 }

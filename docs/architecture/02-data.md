@@ -48,9 +48,9 @@ safe filename and unique case-insensitively, including aliases.
 | `eval/questions.toml` | questions with expected keys/passages | you | `eval` |
 | `curation/*.tsv` | authority files (author, journal names) | you | `bib.normalise` |
 
-Every `[@key]` in any of these directories (`refs.NOTE_DIRS`) feeds the
-`backlinks` table, so a paper's page shows which notes cite it; `rename`
-rewrites them.
+Every `[@key]` in any of these directories (`refs.NOTE_DIRS`) is a
+backlink: `refs.backlinks()` scans the notes when asked, so a paper's page
+shows which notes cite it; `rename` rewrites them.
 
 # The derived index: `.litnav/index.sqlite`
 
@@ -71,9 +71,20 @@ rewrites them.
 - **Incremental update.** `index.update()` compares each item's signature
   (sizes and mtimes of its four files plus the chunker and section-parser versions) and re-indexes
   only changed items; removed items are deleted. `embed.update()` then embeds
-  any chunk or paper text without a vector.
-- **Concurrency.** WAL mode; writers use `index.writer()`; readers (web, MCP)
-  open read-only connections.
+  any chunk or paper text without a vector. A chunk's vector hash is set when it is
+  indexed, so reindexing an item (e.g. after a tag change) keeps it in semantic
+  search.
+- **Concurrency.** WAL mode; writers use `index.writer()`. Long-lived readers
+  (web app, MCP server) hold one read-only connection through
+  `index.Reader`, which reopens it if the file is replaced by a rebuild.
+- **Generation.** Every write that changes items or vectors bumps
+  `state.gen`; the in-memory vector matrix (`embed.matrix`) is cached per
+  index file and rebuilt when the generation changes, so a sharing change
+  reaches semantic search at once.
+- **Sharing is stored twice**: in `meta.toml` (the truth) and copied onto
+  `items`/`chunks` for fast filtering. `litnav share` and the web app reindex
+  the item at once; the model-facing tools also re-check each result against
+  `meta.toml`, so a hand edit is safe before the next `litnav index`.
 
 Other derived files in `.litnav/`:
 

@@ -50,7 +50,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 CREATE TABLE IF NOT EXISTS vectors (vhash TEXT PRIMARY KEY, model TEXT, dim INTEGER, vec BLOB);
 CREATE TABLE IF NOT EXISTS paper_vectors (key TEXT PRIMARY KEY, vhash TEXT);
 CREATE TABLE IF NOT EXISTS edges (src TEXT, dst TEXT, PRIMARY KEY (src, dst));
-CREATE TABLE IF NOT EXISTS backlinks (src TEXT, dst TEXT, PRIMARY KEY (src, dst));
 """
 
 
@@ -72,6 +71,42 @@ def connect(lib, readonly: bool = False) -> sqlite3.Connection:
         con.execute("INSERT OR IGNORE INTO state VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
     con.row_factory = sqlite3.Row
     return con
+
+
+def bump(con) -> None:
+    """Advance the index generation: readers' caches (embed.matrix) key on it."""
+    con.execute("INSERT INTO state VALUES ('gen', '1') ON CONFLICT(k) DO UPDATE "
+                "SET v = CAST(v AS INTEGER) + 1")
+
+
+def generation(con) -> str:
+    r = con.execute("SELECT v FROM state WHERE k='gen'").fetchone()
+    return r[0] if r else "0"
+
+
+class Reader:
+    """One read-only connection for a long-lived process (web app, MCP
+    server), reopened when the index file is replaced (`index --rebuild`)."""
+
+    def __init__(self, lib):
+        import threading
+        self.lib, self._con, self._ino = lib, None, None
+        self._lock = threading.Lock()
+
+    def __call__(self) -> sqlite3.Connection:
+        with self._lock:
+            return self._get()
+
+    def _get(self) -> sqlite3.Connection:
+        try:
+            ino = db_path(self.lib).stat().st_ino
+        except FileNotFoundError:
+            ino = None
+        if self._con is None or ino != self._ino:
+            if self._con is not None:
+                self._con.close()
+            self._con, self._ino = connect(self.lib, readonly=True), ino
+        return self._con
 
 
 @contextmanager
@@ -107,6 +142,8 @@ def _abstract(parsed: S.Parsed) -> str:
 
 def index_item(con, it) -> int:
     """(Re)index one item; returns the number of chunks."""
+    from .embed import vhash
+    model = it.lib.config["search"]["embedding_model"]
     key = it.key
     con.execute("DELETE FROM items WHERE key=?", (key,))
     con.execute("DELETE FROM items_fts WHERE key=?", (key,))
@@ -138,9 +175,11 @@ def index_item(con, it) -> int:
                         (key, s.slug, s.title, s.level, s.kind, s.start, s.end, i))
     for c in cs:
         h = C.header(first, it.year, it.title, c.section_title)
+        # the vector hash is set now, so a chunk whose text already has a vector
+        # stays in semantic search without waiting for `embed.update`
         con.execute("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
             c.id, key, c.section, c.section_title, c.kind, c.ord, c.start, c.end, c.text, h,
-            it.sharing, None))
+            it.sharing, vhash(model, f"{h}\n{c.text}")))
         con.execute("INSERT INTO chunks_fts VALUES (?,?,?,?)", (c.id, key, h, c.text))
     return len(cs)
 
@@ -170,6 +209,8 @@ def update(lib, *, rebuild: bool = False, keys_=None, log=print) -> dict:
                 log(f"  indexed {n}/{len(todo)}")
                 con.commit()
         con.execute("INSERT OR REPLACE INTO state VALUES ('chunker', ?)", (str(C.VERSION),))
+        if stats["indexed"] or stats["removed"]:
+            bump(con)
     return stats
 
 

@@ -72,8 +72,7 @@ def create_app(lib: Library, port: int, token: str | None = None):
     git = Git(lib.root)
     state = {"tools": None}
 
-    def con():
-        return index.connect(lib, readonly=True)
+    con = index.Reader(lib)          # one connection, reopened after a rebuild
 
     class Guard:
         def __init__(self, app):

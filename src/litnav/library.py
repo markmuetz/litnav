@@ -165,6 +165,7 @@ class Library:
         self.state_dir = self.root / config.STATE_DIR
         self._aliases: dict[str, str] | None = None
         self._fold: dict[str, str] | None = None
+        self._seen: int | None = None      # papers/ mtime when the caches were built
         # The owner's answer at `init`: may licensed papers' text go to a model?
         self.licensed_to_models = bool(self.config["library"].get("licensed_to_models", True))
 
@@ -223,8 +224,20 @@ class Library:
     def invalidate(self):
         self._aliases = self._fold = None
 
+    def _fresh(self) -> None:
+        """Drop the key and alias caches if papers/ changed (an import or rename
+        by another process, e.g. the CLI while the web app or MCP server runs)."""
+        try:
+            m = self.papers_dir.stat().st_mtime_ns
+        except FileNotFoundError:
+            m = None
+        if m != self._seen:
+            self._aliases = self._fold = None
+            self._seen = m
+
     def resolve(self, key: str) -> str | None:
         """Exact key, case-insensitive key, or alias."""
+        self._fresh()
         cf = key.casefold()
         return self._folded().get(cf) or self.alias_map().get(cf)
 

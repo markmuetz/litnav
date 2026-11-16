@@ -239,7 +239,9 @@ def _claude_code(lib, question, history):
         cfgp = os.path.join(td, "mcp.json")
         with open(cfgp, "w") as fh:
             json.dump(mcp, fh)
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+        # the prompt goes on stdin: as an argument, a question starting with "-"
+        # would be read as an option
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
                "--mcp-config", cfgp, "--strict-mcp-config", "--tools", "",
                # no transcript of library passages, none of the user's settings or memory
                "--no-session-persistence", "--setting-sources", "", "--disable-slash-commands",
@@ -249,37 +251,50 @@ def _claude_code(lib, question, history):
             cmd += ["--model", model]
         yield {"type": "status", "message": "asking Claude Code ..."}
         errf = open(os.path.join(td, "stderr.txt"), "w+")    # a file, so a full pipe can't block
-        p = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=errf, text=True)
-        names = {}
-        for line in p.stdout:
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            t = ev.get("type")
-            if t == "assistant":
-                for b in ev.get("message", {}).get("content", []):
-                    if b.get("type") == "text":
-                        yield {"type": "text", "text": b["text"] + "\n\n"}
-                    elif b.get("type") == "tool_use":
-                        n = b.get("name", "").replace("mcp__litnav__", "")
-                        names[b.get("id")] = n
-                        yield {"type": "tool", "name": n, "input": b.get("input", {})}
-            elif t == "user":
-                for b in ev.get("message", {}).get("content", []):
-                    if isinstance(b, dict) and b.get("type") == "tool_result":
-                        c = b.get("content")
-                        txt = c if isinstance(c, str) else " ".join(
-                            x.get("text", "") for x in (c or []) if isinstance(x, dict))
-                        n = names.get(b.get("tool_use_id"), "")
-                        yield {"type": "tool_result", "name": n, "summary": _summ(n, txt),
-                               "error": bool(b.get("is_error"))}
-            elif t == "result" and ev.get("is_error"):
-                yield {"type": "error", "message": str(ev.get("result", "Claude Code failed"))[:500]}
-        p.wait()
-        if p.returncode:
+        p = subprocess.Popen(cmd, cwd=td, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errf,
+                             text=True)
+        p.stdin.write(prompt)
+        p.stdin.close()
+        try:
+            yield from _cc_events(p)
+        finally:
+            # the page may close the stream mid-answer: don't leave claude running
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        if p.returncode and p.returncode > 0:
             errf.seek(0)
             err = errf.read()[-500:]
             yield {"type": "error", "message": f"claude exited {p.returncode}: {err}"}
         errf.close()
     yield {"type": "done"}
+
+
+def _cc_events(p):
+    """Map claude's stream-json output to Ask events."""
+    names = {}
+    for line in p.stdout:
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = ev.get("type")
+        if t == "assistant":
+            for b in ev.get("message", {}).get("content", []):
+                if b.get("type") == "text":
+                    yield {"type": "text", "text": b["text"] + "\n\n"}
+                elif b.get("type") == "tool_use":
+                    n = b.get("name", "").replace("mcp__litnav__", "")
+                    names[b.get("id")] = n
+                    yield {"type": "tool", "name": n, "input": b.get("input", {})}
+        elif t == "user":
+            for b in ev.get("message", {}).get("content", []):
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    c = b.get("content")
+                    txt = c if isinstance(c, str) else " ".join(
+                        x.get("text", "") for x in (c or []) if isinstance(x, dict))
+                    n = names.get(b.get("tool_use_id"), "")
+                    yield {"type": "tool_result", "name": n, "summary": _summ(n, txt),
+                           "error": bool(b.get("is_error"))}
+        elif t == "result" and ev.get("is_error"):
+            yield {"type": "error", "message": str(ev.get("result", "Claude Code failed"))[:500]}

@@ -23,7 +23,8 @@ class Tools:
         # Metadata (title, authors, keys, section titles) still goes to the model
         # when the owner said no to licensed text: it is what lookups send anyway.
         self.meta_purpose = S.LOOKUP if self.purpose == S.SEND_OUT_STRICT else self.purpose
-        self.con = index.connect(lib, readonly=True)
+        self._reader = index.Reader(lib)
+        self._reader()                       # fail now if there is no index yet
         self._embedder = embedder
         self._emb_loaded = embedder is not None
 
@@ -37,6 +38,25 @@ class Tools:
             except Exception:
                 self._embedder = None
         return self._embedder
+
+    @property
+    def con(self):
+        return self._reader()
+
+    def _live(self, rows, purpose, key="key"):
+        """Drop rows whose item's *current* sharing (meta.toml) forbids the
+        purpose. The index keeps a copy of each item's level for fast
+        filtering; this catches a level changed since the last `litnav index`."""
+        ok: dict[str, bool] = {}
+        out = []
+        for r in rows:
+            k = r[key]
+            if k not in ok:
+                kk = self.lib.resolve(k)
+                ok[k] = bool(kk) and self.lib.get(kk).allowed(purpose)
+            if ok[k]:
+                out.append(r)
+        return out
 
     def _item_ok(self, key: str, need_text: bool = False):
         k = self.lib.resolve(key)
@@ -59,9 +79,10 @@ class Tools:
         f = search.Filters(year_from=year_from, year_to=year_to, tag=tag, author=author)
         purpose = S.SERVE_TEXT if self.purpose == S.SERVE_META and not papers else self.purpose
         if papers:
-            return search.papers(self.con, query, embedder=self.embedder, k=k, filters=f, purpose=purpose)
-        res = search.search(self.con, query, embedder=self.embedder, mode=mode, k=k, filters=f,
-                            purpose=purpose)
+            return self._live(search.papers(self.con, query, embedder=self.embedder, k=k, filters=f,
+                                            purpose=purpose), purpose)
+        res = self._live(search.search(self.con, query, embedder=self.embedder, mode=mode, k=k,
+                                       filters=f, purpose=purpose), purpose)
         keep = ("id", "key", "title", "year", "authors", "section_title", "kind", "start", "end",
                 "text", "score")
         return [{x: r.get(x) for x in keep} for r in res]
@@ -112,7 +133,7 @@ class Tools:
             out["similar"] = [s["key"] for s in search.similar(
                 self.con, it.key, self.embedder.name, k=k, purpose=self.meta_purpose)]
         for kk, v in out.items():
-            out[kk] = [x for x in v if self.lib.get(x).allowed(self.meta_purpose)][:k]
+            out[kk] = [x["key"] for x in self._live([{"key": x} for x in v], self.meta_purpose)][:k]
         return out
 
     def list_papers(self, author: str | None = None, year_from: int | None = None,
@@ -133,14 +154,20 @@ class Tools:
         w.append(f"sharing IN ({','.join('?' * len(lv))})"); a += lv
         rows = self.con.execute(f"SELECT key, title, year, authors FROM items WHERE {' AND '.join(w)} "
                                 f"ORDER BY year DESC LIMIT ?", a + [min(int(k), 100)])
-        return [dict(r) for r in rows]
+        return self._live([dict(r) for r in rows], self.meta_purpose)
 
     def reading_due(self) -> dict:
         from . import reading
         d = reading.due(self.lib)
+
+        def ok(ident):                       # concept cards are the user's own
+            if ident.startswith("concept:"):
+                return True
+            k = self.lib.resolve(ident)
+            return bool(k) and self.lib.get(k).allowed(self.meta_purpose)
         return {"recall": [{"id": c["id"], "prompt": c.get("prompt", ""), "box": c.get("box")}
-                           for c in d["recall"]],
-                "reading": [r["key"] for r in d["reading"]]}
+                           for c in d["recall"] if ok(c["id"])],
+                "reading": [r["key"] for r in d["reading"] if ok(r["key"])]}
 
     def get_note(self, key: str) -> dict:
         if self.purpose in (S.SERVE_META, S.SERVE_TEXT):

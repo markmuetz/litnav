@@ -50,6 +50,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "discovery" -> "net";
  "discovery" -> "sharing";
  "discovery" -> "util";
+ "embed" -> "index";
  "embed" -> "sharing";
  "evaluate" -> "chunks";
  "evaluate" -> "index";
@@ -81,6 +82,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "importers.legacy" -> "projects";
  "importers.legacy" -> "util";
  "index" -> "chunks";
+ "index" -> "embed";
  "index" -> "keys";
  "index" -> "sections";
  "init" -> "config";

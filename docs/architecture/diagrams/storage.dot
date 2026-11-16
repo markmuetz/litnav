@@ -18,7 +18,7 @@ digraph G {
   ev    [label="eval/questions.toml  eval/runs/*.json"];
   cur   [label="curation/  author/journal canonical TSVs, drafts, preprints"];
   st    [label=".litnav/   (gitignored; or index_dir outside a synced folder)", fillcolor="#DCEBFA", color="#3B78B8"];
-  sq    [label="index.sqlite   items, sections, chunks, FTS5, vectors, edges, backlinks", fillcolor="#DCEBFA", color="#3B78B8"];
+  sq    [label="index.sqlite   items, sections, chunks, FTS5, vectors, edges", fillcolor="#DCEBFA", color="#3B78B8"];
   gj    [label="graph.json     nodes, links, outside candidates (+ citers)", fillcolor="#DCEBFA", color="#3B78B8"];
   ca    [label="cache/http/    cached API responses", fillcolor="#DCEBFA", color="#3B78B8"];
   ip    [label="import-plan.tsv  summarize_batch.json  local.toml", fillcolor="#DCEBFA", color="#3B78B8"];

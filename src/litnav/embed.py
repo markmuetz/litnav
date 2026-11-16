@@ -109,6 +109,9 @@ def update(lib, con, embedder, *, limit: int | None = None, log=print) -> dict:
         rate = done / max(1e-6, time.time() - t0)
         log(f"  embedded {done}/{len(todo)}  ({rate:.0f}/s, ~{(len(todo) - done) / max(rate, 1e-6) / 60:.0f} min left)")
     stats["chunks"] = len(todo) - stats["papers"]
+    from .index import bump
+    bump(con)
+    con.commit()
     return stats
 
 
@@ -119,10 +122,17 @@ def matrix(con, model: str, what: str = "chunks"):
     """(ids, keys, sharing, normalised matrix) for chunks or papers, cached
     per connection until the vectors table changes."""
     import numpy as np
+    from .index import generation
+    path = con.execute("PRAGMA database_list").fetchone()[2]
+    try:
+        ino = os.stat(path).st_ino
+    except OSError:
+        ino = None
     n = con.execute("SELECT count(*) FROM vectors WHERE model=?", (model,)).fetchone()[0]
-    ck = (id(con), model, what, n)
-    if ck in _CACHE:
-        return _CACHE[ck]
+    ck, fp = (path, model, what), (ino, generation(con), n)
+    hit = _CACHE.get(ck)
+    if hit and hit[0] == fp:
+        return hit[1]
     if what == "chunks":
         q = ("SELECT c.id, c.key, c.sharing, v.vec FROM chunks c JOIN vectors v "
              "ON v.vhash=c.vhash AND v.model=?")
@@ -136,9 +146,7 @@ def matrix(con, model: str, what: str = "chunks"):
         m = np.frombuffer(b"".join(r[3] for r in rows), dtype="float32").reshape(len(rows), -1)
         m = m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
         res = ([r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows], m)
-    for k in [k for k in _CACHE if k[0] == id(con) and k[2] == what]:
-        del _CACHE[k]
-    _CACHE[ck] = res
+    _CACHE[ck] = (fp, res)          # one entry per index file, model and kind
     return res
 
 
