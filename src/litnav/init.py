@@ -35,7 +35,8 @@ repo, set `track_text = false` in `library.toml` first.
 
 - `papers/<key>/`: one folder per paper (`ref.bib`, `meta.toml`, `text.txt`,
   `summary.json`)
-- `pdfs/`: the PDFs, `<key>.pdf` (not tracked). Drop new ones in `pdfs/_inbox/`.
+- the PDFs, `<key>.pdf`: in `pdf_dir` (`library.toml`; default `pdfs/`, not tracked).
+  New downloads go in its `_inbox/`.
 - `notes/`, `concepts/`, `topics/`: your own writing. Cite papers as `[@key]`.
 - `reading/`: reading list and recall state
 """
