@@ -108,7 +108,7 @@ def _withheld_texts(lib, keys) -> list[str]:
     return out
 
 
-CITE = re.compile(r"\[@([A-Za-z][\w.:-]*)\]")
+CITE = re.compile(r"(?:\[|;\s*)@([A-Za-z][\w.:-]*?)[.:-]?(?=[\]\s;,§])")    # [@key], [@key § 2], [@a; @b]
 
 
 # ---- engines
@@ -178,8 +178,8 @@ def opencode_config(lib, cfg: dict) -> dict:
             "type": "local",
             "command": [sys.executable, "-m", "litnav.cli", "--library", str(lib.root), "mcp",
                         "--local-model"],
-            "environment": {"LITNAV_LOCAL_AGENT": "1",
-                            "LITNAV_ACCESS_LOG": "{env:LITNAV_ACCESS_LOG}"},
+            # LITNAV_ACCESS_LOG comes from the inherited environment
+            "environment": {"LITNAV_LOCAL_AGENT": "1"},
             "codemode": False}}},
         "permissions": deny_all,
         "agents": {"librarian": {
@@ -190,7 +190,7 @@ def opencode_config(lib, cfg: dict) -> dict:
     }
 
 
-def isolated_env(access_log: Path, api_key: str = "") -> dict:
+def isolated_env(access_log: Path, api_key: str = "", cwd: Path | None = None) -> dict:
     """The calling agent's environment, minus its markers, with every outbound
     connection except to localhost sent to a closed port."""
     env = {k: v for k, v in os.environ.items()
@@ -202,7 +202,19 @@ def isolated_env(access_log: Path, api_key: str = "") -> dict:
     env["LITNAV_ACCESS_LOG"] = str(access_log)
     env["LITNAV_LOCAL_AGENT"] = "1"
     env["LITNAV_MODEL_API_KEY"] = api_key or "none"
+    if cwd:
+        # OpenCode finds its project config from $PWD, not the real working
+        # directory: without this it would read the caller's directory instead
+        env["PWD"] = str(cwd)
     return env
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_HEADER = re.compile(r"^\s*>\s*\w+\s*·.*$", re.M)          # "> librarian · model"
+
+
+def clean_output(text: str) -> str:
+    return _HEADER.sub("", _ANSI.sub("", text)).strip()
 
 
 def _opencode(lib, question: str, keys: list[str] | None, timeout: float) -> tuple[str, list[str], str]:
@@ -225,7 +237,7 @@ def _opencode(lib, question: str, keys: list[str] | None, timeout: float) -> tup
     try:
         p = subprocess.run([exe, "run", "--standalone", "--agent", "librarian",
                             "--model", f"{PROVIDER}/{model}", "--archived", "--title", "litnav ask-local",
-                            prompt], cwd=d, env=isolated_env(log, localmodel.api_key(cfg)),
+                            prompt], cwd=d, env=isolated_env(log, localmodel.api_key(cfg), d),
                            capture_output=True, text=True,
                            timeout=timeout, stdin=subprocess.DEVNULL)
         accessed = [l.strip() for l in log.read_text("utf-8").splitlines() if l.strip()]
@@ -233,7 +245,7 @@ def _opencode(lib, question: str, keys: list[str] | None, timeout: float) -> tup
         log.unlink(missing_ok=True)
     if p.returncode != 0:
         raise RuntimeError(f"opencode failed ({p.returncode}): {(p.stderr or p.stdout).strip()[-500:]}")
-    return (batch_runner._THINK.sub("", p.stdout).strip(), accessed,
+    return (batch_runner._THINK.sub("", clean_output(p.stdout)).strip(), accessed,
             f"{model} ({cfg.get('profile', 'default')}) via opencode")
 
 

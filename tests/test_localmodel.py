@@ -352,6 +352,7 @@ def test_ask_local_opencode_engine_is_isolated(ilib, monkeypatch):
     assert rec["read"] == ["smith2021cold"] and rec["cited"] == ["smith2021cold"]
     env = seen["env"]
     assert "CLAUDECODE" not in env and env["LITNAV_LOCAL_AGENT"] == "1"
+    assert env["PWD"] == str(seen["cwd"])                       # OpenCode reads its config from $PWD
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:9" and "127.0.0.1" in env["NO_PROXY"]
     assert "--standalone" in seen["cmd"] and seen["cmd"][seen["cmd"].index("--model") + 1] == "litnav/fake-14b"
     cfg = json.loads((Path(seen["cwd"]) / "opencode.json").read_text())
@@ -393,3 +394,13 @@ context = 65536
                         or [{"status": "no"}])
     t.verify_claim("smith2021cold", "x", profile="orchid")
     assert seen == ["qwen3-235b"] and lib.local_model["model"] == "fake-14b"
+
+
+def test_cite_forms():
+    t = "x [@a2020b] y [@c2019d § Results] z [@e2018f, p. 3] [@g2017h; @i2016j]"
+    assert asklocal.CITE.findall(t) == ["a2020b", "c2019d", "e2018f", "g2017h", "i2016j"]
+
+
+def test_clean_opencode_output():
+    raw = "\x1b[0m\n> librarian · qwen3:30b-a3b\n\x1b[1mCold pools [@a2020b].\x1b[0m\n"
+    assert asklocal.clean_output(raw) == "Cold pools [@a2020b]."

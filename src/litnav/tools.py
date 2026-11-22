@@ -235,6 +235,7 @@ class Tools:
 
     def get_paper(self, key: str) -> dict:
         it = self._item_ok(key)
+        self._accessed([it.key])                 # the abstract is the paper's text too
         d = it.as_dict(self.purpose)
         r = self.con.execute("SELECT abstract, n_chunks, sections_detected FROM items WHERE key=?",
                              (it.key,)).fetchone()
