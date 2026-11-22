@@ -234,3 +234,37 @@ def _stats(xs):
         return {}
     return {"n": len(xs), "median": xs[len(xs) // 2], "mean": round(sum(xs) / len(xs), 1),
             "min": xs[0], "max": xs[-1], "total_min": round(sum(xs) / 60, 1)}
+
+
+# ---- as a cluster batch (litnav eval-model push; results come back with `litnav queue pull`)
+
+def push(lib, eval_path: Path, *, submit: bool = True, log=print) -> dict:
+    from . import spool
+    cases = load(eval_path)
+    jobs = [{**j, "kind": "eval"} for j in order(build_jobs(lib, cases))]
+    return spool.push(lib, jobs, kind="eval", meta={"eval": str(eval_path)}, submit=submit, log=log)
+
+
+def import_batch(lib, b: dict, jobs: dict, fresh: list, *, log=print) -> None:
+    """Write a pulled eval batch's new results in `run`'s format, so `report` scores them."""
+    if not fresh:
+        return
+    if not b.get("run_dir"):
+        model = fresh[0].get("model", "model").split("/")[-1].replace(":", "-")
+        b["run_dir"] = str(lib.root / "derived" / "model-eval" / f"{dt.date.today().isoformat()}-{model}")
+    rd = Path(b["run_dir"])
+    rd.mkdir(parents=True, exist_ok=True)
+    with open(rd / "results.jsonl", "a", encoding="utf-8") as f:
+        for r in fresh:
+            j = jobs[r["id"]]
+            raw = r.get("raw", "")
+            out = r.get("output") if isinstance(r.get("output"), dict) else None
+            f.write(json.dumps({"id": j["id"], "case": j["case"], "variant": j["variant"], "key": j["key"],
+                                "seconds": r.get("seconds"), "model": r.get("model"),
+                                "prompt_chars": j["prompt_chars"], "raw_chars": len(raw), "raw": raw,
+                                "output": out, "error": r.get("error", ""), "passages": j["passages"]},
+                               ensure_ascii=False) + "\n")
+    if not (rd / "run.json").exists():
+        (rd / "run.json").write_text(json.dumps({"batch": True, "eval": b.get("eval"),
+                                                 "model": fresh[0].get("model"), "pushed": b["pushed"]}, indent=1))
+    log(f"  eval: {len(fresh)} result(s) into {rd}")

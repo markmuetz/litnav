@@ -21,10 +21,13 @@ def add(sub):
 
     p = sub.add_parser("eval-model", help="evaluate the local model's claim checks on an eval set "
                        "(run: stores every reply; report: scores them)")
-    p.add_argument("action", choices=["run", "report"])
+    p.add_argument("action", choices=["run", "report", "push"],
+                   help="push: send it as a batch to the cluster spool ([batch_remote]); "
+                        "`litnav queue pull` brings the replies back")
     p.add_argument("eval", help="eval set (JSONL), e.g. eval/model-claims.jsonl")
     p.add_argument("--run-dir", help="default derived/model-eval/<date>-<model>")
     p.add_argument("--limit-minutes", type=float, default=88)
+    p.add_argument("--no-submit", action="store_true", help="push: don't submit the worker job")
     p.set_defaults(func=cmd_eval_model)
 
     p = sub.add_parser("models", help="the local model endpoints (profiles) and whether each is up")
@@ -60,6 +63,17 @@ def add(sub):
     q = qs.add_parser("import", help="apply a folder's results.jsonl; done jobs leave the queue")
     q.add_argument("dir")
     q.set_defaults(func=cmd_queue_import)
+    q = qs.add_parser("push", help="send the queued jobs to the cluster spool as a batch "
+                      "([batch_remote] in .litnav/local.toml) and submit the worker if none is queued")
+    q.add_argument("--no-submit", action="store_true")
+    q.set_defaults(func=cmd_queue_push)
+    q = qs.add_parser("pull", help="fetch and apply results from the spool; finished batches are deleted")
+    q.set_defaults(func=cmd_queue_pull)
+    q = qs.add_parser("status", help="the worker job, the spool and the batches not yet pulled")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_queue_status)
+    q = qs.add_parser("submit", help="submit the worker job unless one is queued or running")
+    q.set_defaults(func=cmd_queue_submit)
     q = qs.add_parser("run", help="run the queue now with [local_model]")
     q.add_argument("--limit", type=int)
     q.set_defaults(func=cmd_queue_run)
@@ -161,6 +175,52 @@ def cmd_queue_import(a):
     _reindex(lib)
 
 
+def _err(m):
+    print(m, file=sys.stderr)
+
+
+def cmd_queue_push(a):
+    from .. import spool
+    lib = Library.find(a.library)
+    r = spool.push(lib, submit=not a.no_submit, log=_err)
+    if not r["batch"]:
+        _err("nothing to push: the queue is empty, or every queued job is already in a batch")
+
+
+def cmd_queue_pull(a):
+    from .. import spool
+    lib = Library.find(a.library)
+    s = spool.pull(lib, log=_err)
+    for b, v in s.items():
+        print(f"{b}  {v}")
+    if not s:
+        _err("no batches out")
+    _reindex(lib)
+
+
+def cmd_queue_status(a):
+    from .. import spool
+    lib = Library.find(a.library)
+    s = spool.status(lib)
+    if a.json:
+        print(json.dumps(s, indent=1))
+        return
+    print(f"worker job: {s['job'] or 'none queued or running'}")
+    w = s["worker"]
+    if w:
+        print(f"worker said ({w.get('time')}, {w.get('host')}): {w.get('state')} "
+              + " ".join(f"{k}={w[k]}" for k in ("batch", "jobs", "model", "note", "error") if w.get(k)))
+    for b in s["spool"]:
+        print(f"  {b['where']:8s} {b['batch']}  {b['results']}/{b['jobs']} results")
+    for b, v in s["local"].items():
+        print(f"  local    {b}  {v['state']}, {v['kind']}, {v['imported']}/{v['jobs']} imported")
+
+
+def cmd_queue_submit(a):
+    from .. import spool
+    spool.submit_worker(Library.find(a.library), log=_err)
+
+
 def cmd_queue_run(a):
     lib = Library.find(a.library)
     jobs = localmodel.queued(lib)[: a.limit] if a.limit else localmodel.queued(lib)
@@ -210,6 +270,11 @@ def cmd_eval_model(a):
     ev = Path(a.eval)
     if not ev.is_absolute() and not ev.exists():
         ev = lib.root / ev
+    if a.action == "push":
+        r = modeleval.push(lib, ev, submit=not a.no_submit, log=_err)
+        _err(f"pushed {r['jobs']} call(s) as batch {r['batch']}; `litnav queue pull` brings the "
+             "replies back, then `litnav eval-model report EVAL --run-dir DIR` (pull prints DIR)")
+        return
     if a.run_dir:
         rd = Path(a.run_dir)
     else:

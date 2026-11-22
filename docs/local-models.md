@@ -185,6 +185,35 @@ rsync -a jasmin:~/litnav-batch-2026-11-22/results.jsonl ~/litnav-batch-2026-11-2
 litnav queue import ~/litnav-batch-2026-11-22
 ```
 
+### When a node is free only some of the time: the spool
+
+Rather than copying folders by hand, keep a spool on the cluster and let a
+worker job take whatever is in it whenever SLURM gives it a node:
+
+```toml
+# .litnav/local.toml
+[batch_remote]
+host = "sci-host.example.org"        # ssh host
+spool = "/path/on/the/cluster/spool" # made mode 700; somewhere with room (not a small $HOME)
+job_name = "llm-batch"               # the worker's SLURM job name
+submit = "sbatch --job-name=llm-batch --export=ALL,LLM_SPOOL=/path/on/the/cluster/spool worker.sbatch"
+```
+
+```sh
+litnav queue push          # the queued jobs not already out, as one batch; submits the worker if none is queued
+litnav queue status        # the worker job, what it is doing, each batch's progress
+litnav queue pull          # apply new results (partial ones too); finished batches are deleted on both sides
+litnav eval-model push eval/model-claims.jsonl    # an eval as a batch; pull brings its replies back
+```
+
+The worker job starts the model server, then runs
+`python3 SPOOL/run_spool.py SPOOL --url ... --model ... --concurrency 32 --limit-minutes N`.
+It takes batches interrupted by an earlier job first, then the inbox, oldest
+first, including batches pushed while it waited. It ends as soon as the
+spool is empty (exit 0), or at the time limit with work left (exit 3:
+resubmit). Requests run in parallel (`--concurrency`), which is what makes a
+vLLM node fast. Push as often as you like; pull whenever you're online.
+
 Results whose paper text changed after the export are dropped, not applied.
 The exported folder holds paper text: keep it on your own account and delete
 it when the results are back. Confidential papers are never queued or

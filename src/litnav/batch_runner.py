@@ -18,7 +18,9 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -76,12 +78,15 @@ def chat(url: str, model: str, messages: list, *, schema: dict | None = None,
 
 
 def run_job(job: dict, url: str, model: str, **kw) -> dict:
+    t0, text = time.time(), ""
     try:
         text, real = chat(url, model, job["messages"], schema=job.get("schema"), **kw)
         out = parse_json(text) if job.get("schema") else text
-        return {"id": job["id"], "ok": True, "output": out, "model": real}
+        return {"id": job["id"], "ok": True, "output": out, "model": real, "raw": text,
+                "seconds": round(time.time() - t0, 1)}
     except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-        return {"id": job["id"], "ok": False, "error": f"{type(e).__name__}: {e}"[:500], "model": model}
+        return {"id": job["id"], "ok": False, "error": f"{type(e).__name__}: {e}"[:500], "model": model,
+                "raw": text, "seconds": round(time.time() - t0, 1)}
 
 
 def done_ids(results: Path) -> set[str]:
@@ -98,25 +103,57 @@ def done_ids(results: Path) -> set[str]:
     return out
 
 
-def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | None = None,
-        log=print, **kw) -> int:
-    """Run every job not already in results. Stops cleanly before limit_s
-    seconds (a SLURM time limit) so a rerun can pick up."""
+def todo_jobs(jobs: Path, results: Path) -> list:
     seen = done_ids(results)
-    todo = [j for j in (json.loads(l) for l in jobs.read_text("utf-8").splitlines() if l.strip())
+    return [j for j in (json.loads(l) for l in jobs.read_text("utf-8").splitlines() if l.strip())
             if j["id"] not in seen]
-    t0, n = time.time(), 0
-    with open(results, "a", encoding="utf-8") as f:
-        for i, job in enumerate(todo, 1):
-            if limit_s and time.time() - t0 > limit_s:
-                log(f"time limit: {len(todo) - i + 1} job(s) left; rerun to continue")
+
+
+def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | None = None,
+        concurrency: int = 1, log=print, **kw) -> int:
+    """Run every job not already in results, `concurrency` at a time (vLLM
+    batches parallel requests; Ollama mostly queues them). Stops starting
+    jobs after limit_s seconds (a SLURM time limit) so a rerun can pick up;
+    each result is written as it finishes."""
+    todo = todo_jobs(jobs, results)
+    if results.is_file() and results.stat().st_size:
+        with open(results, "rb") as f:          # a killed job can leave half a line: start a new one
+            f.seek(-1, 2)
+            if f.read(1) != b"\n":
+                with open(results, "a", encoding="utf-8") as g:
+                    g.write("\n")
+    t0, n, i = time.time(), 0, 0
+    lock = threading.Lock()
+    with open(results, "a", encoding="utf-8") as f, \
+            ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        pending, it = set(), iter(todo)
+        stopped = False
+        while True:
+            while not stopped and len(pending) < max(1, concurrency):
+                if limit_s and time.time() - t0 > limit_s:
+                    stopped = True
+                    left = len(todo) - i
+                    if left:
+                        log(f"time limit: {left} job(s) not started; rerun to continue")
+                    break
+                job = next(it, None)
+                if job is None:
+                    stopped = True
+                    break
+                i += 1
+                pending.add(pool.submit(run_job, job, url, model, **kw))
+            if not pending:
                 break
-            r = run_job(job, url, model, **kw)
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            f.flush()
-            n += r["ok"]
-            log(f"[{i}/{len(todo)}] {job['id']} {job.get('kind', '')} "
-                + ("ok" if r["ok"] else f"FAILED {r['error'][:120]}"))
+            finished, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                r = fut.result()
+                with lock:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                    f.flush()
+                n += r["ok"]
+                rate = n / max(time.time() - t0, 1) * 3600
+                log(f"[{n}/{len(todo)}] {r['id']} {r['seconds']:.0f}s "
+                    + ("ok" if r["ok"] else f"FAILED {r['error'][:120]}") + f" ({rate:.0f}/h)")
     return n
 
 
@@ -128,9 +165,12 @@ def main(argv=None) -> int:
     p.add_argument("--model", required=True)
     p.add_argument("--timeout", type=float, default=600)
     p.add_argument("--limit-minutes", type=float, help="stop starting new jobs after this long")
+    p.add_argument("--concurrency", "-j", type=int, default=1, help="requests in flight (vLLM: 32-64)")
+    p.add_argument("--api-key-file", help="file holding the server's API key")
     a = p.parse_args(argv)
-    n = run(Path(a.jobs), Path(a.results), a.url, a.model, timeout=a.timeout,
-            limit_s=a.limit_minutes * 60 if a.limit_minutes else None)
+    key = Path(a.api_key_file).expanduser().read_text().strip() if a.api_key_file else ""
+    n = run(Path(a.jobs), Path(a.results), a.url, a.model, timeout=a.timeout, api_key=key,
+            concurrency=a.concurrency, limit_s=a.limit_minutes * 60 if a.limit_minutes else None)
     print(f"{n} job(s) done", file=sys.stderr)
     return 0
 
