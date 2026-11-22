@@ -95,8 +95,18 @@ Everything else (embeddings, OCR, search, the web app) runs locally.
 
 # Things that are your responsibility
 
-- **The library repo holds licensed text** (`text.txt`, if `track_text =
-  true`). Push it only to a private remote.
+- **Keep licensed text out of the library repo.** Pushing a licensed paper's
+  text anywhere, even to a private remote, is redistribution, and once it is
+  in the history it is hard to remove. New libraries have `track_text =
+  false`: `papers/*/text.txt` is ignored (`litnav extract` regenerates it from
+  the PDFs), and so are figure crops (`notes/figs/<key>_fig*`). A pre-commit
+  hook (`litnav git-check`, installed by `init` or `litnav git-setup`) refuses
+  commits that add them, or a non-open paper's PDF, even with `git add -f`.
+  For an older library: set `track_text = false`, run `litnav git-setup` (it
+  lists tracked files that shouldn't be), untrack them, and rewrite the
+  history before pushing (`git filter-repo --invert-paths --path-glob
+  'papers/*/text.txt'`). A force-push leaves the old commits reachable on
+  GitHub, so push the rewritten history to a new repo instead.
 - **Notes are yours**, and searchable (`search_notes`, `search --notes`).
   Each note file gets a level, re-derived whenever it is indexed or returned
   to a model (`notes.level`):

@@ -76,10 +76,12 @@ over as tests (§ 14); the code is not.
   .litnav/                   index.sqlite, vectors, caches (gitignored)
 ```
 
-**The library repo must stay private** if it tracks `text.txt` (extracted text
-of licensed papers is redistribution if pushed somewhere public). `init` writes
-this into the library's README, and `library.toml` can turn off tracking of
-text (`track_text = false`) for users who want to publish their repo.
+**Papers' text stays out of the library repo** (`track_text = false`, the
+default for new libraries): pushing a licensed paper's text anywhere is
+redistribution. Text is regenerated from the PDFs; a pre-commit check
+(`litnav git-check`) refuses paper text, figure crops and non-open PDFs.
+`track_text = true` is for a repo that never leaves the machine; confidential
+papers' text is refused even then.
 
 ### 3.1 Does a flat store keyed by citation key work for everyone?
 

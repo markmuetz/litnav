@@ -17,17 +17,19 @@ Read it right to left for the foundations: `util`, `sharing`, `keys`, `config`, 
 | Module | Lines | Role | Public names |
 |---|---:|---|---|
 | `ask` | 339 | Ask: Anthropic API loop or claude -p over the MCP server; events. | `backend_status`, `stream_answer` |
+| `asklocal` | 277 |  | `scrub`, `opencode_dir`, `opencode_config`, `isolated_env`, `clean_output`, `log_path`, `ask` |
 | `batch_runner` | 139 |  | `parse_json`, `chat`, `run_job`, `done_ids`, `run`, `main` |
 | `bib` | 324 | BibTeX parse/write and house-style normalisation (authority files). | `Entry`, `unwrap`, `parse`, `parse_many`, `Authority`, `redelimit`, `tidy_name`, `fix_authors`, `fix_journal` ... |
 | `chunks` | 201 | Section-aware chunking with stable chunk IDs. | `Chunk`, `windows`, `chunk`, `header` |
-| `cli` | 51 | Entry point: builds the argparse tree from commands/*. | `build_parser`, `main` |
-| `config` | 179 | library.toml defaults, loading, the local.toml overlay. | `LibraryNotFound`, `find_root`, `user_config_path`, `default_library`, `set_default_library`, `load`, `pdf_dir` |
+| `cli` | 56 | Entry point: builds the argparse tree from commands/*. | `build_parser`, `main` |
+| `config` | 180 | library.toml defaults, loading, the local.toml overlay. | `LibraryNotFound`, `find_root`, `user_config_path`, `default_library`, `set_default_library`, `load`, `pdf_dir` |
 | `derived` | 422 | Summaries and themes: selection, outbound gate, API batches, Claude Code. | `outbound`, `text_for`, `is_current`, `select`, `provenance`, `valid`, `write_summary`, `state_path`, `api_submit` ... |
 | `discovery` | 224 | Holdings, candidates, Semantic Scholar explore, to-fetch list. | `norm_doi`, `fold_title`, `Holdings`, `tofetch_path`, `load`, `save`, `add`, `set_status`, `prune` ... |
 | `drafts` | 125 |  | `log_path`, `load`, `is_draft`, `Plan`, `plan_version`, `apply` |
 | `embed` | 184 | Local embeddings (fastembed), vector store, matrices. | `available`, `vhash`, `Embedder`, `chunk_text`, `paper_text`, `update`, `matrix`, `allowed_mask` |
 | `evaluate` | 180 | Search evaluation: recall@10, MRR, compare runs. | `questions_path`, `load`, `fold`, `score_one`, `run`, `summarise`, `report`, `sign_test`, `compare` ... |
 | `extract` | 131 | pdftotext and OCR; text.txt for items. | `NoBackend`, `backends`, `pdf_text`, `own_text`, `has_text_layer`, `ocr_available`, `ocr`, `head`, `normalise_text` ... |
+| `githygiene` | 132 |  | `track_text`, `gitignore_block`, `sync_gitignore`, `problems`, `staged`, `tracked`, `hook_path`, `install_hook` |
 | `graph` | 90 | Citation graph and candidates from OpenAlex. | `short`, `build` |
 | `guard` | 164 |  | `Guard`, `hook` |
 | `identify` | 153 | The identification ladder and title verification. | `Proposal`, `clean_doi`, `ams_doi`, `marker_for`, `verify`, `identify` |
@@ -35,12 +37,12 @@ Read it right to left for the foundations: `util`, `sharing`, `keys`, `config`, 
 | `importers.bibtex` | 115 | Import from a Zotero/JabRef/Mendeley .bib with file fields. | `file_paths`, `pdf_for`, `plan`, `apply` |
 | `importers.legacy` | 114 | Convert a litman data directory. | `read_tags`, `convert` |
 | `index` | 277 | The SQLite index: schema, incremental update, signatures. | `db_path`, `connect`, `bump`, `generation`, `Reader`, `writer`, `signature`, `index_item`, `update` ... |
-| `init` | 133 | litnav init: create a library, ask the licensed-text question. | `in_synced_folder`, `init`, `ask_licensed_to_models` |
+| `init` | 142 | litnav init: create a library, ask the licensed-text question. | `in_synced_folder`, `init`, `ask_licensed_to_models` |
 | `keys` | 195 | Citation-key derivation, folding, stop words, collision handling. | `fold`, `plain`, `words`, `fold_text`, `content_words`, `plausible_year`, `part_number`, `surname`, `derive` ... |
-| `library` | 342 | Item and Library: the file model, resolve/aliases, items(purpose). | `KeyError_`, `Item`, `Library` |
+| `library` | 367 | Item and Library: the file model, resolve/aliases, items(purpose). | `KeyError_`, `Item`, `Library` |
 | `licences` | 106 |  | `code`, `best`, `open_codes`, `apply_to`, `run` |
-| `localmodel` | 362 |  | `gate`, `endpoint`, `summarize_job`, `passages_for`, `verify_job`, `verify_log`, `apply_result`, `verdict_record`, `for_agent` ... |
-| `mcp_server` | 67 | FastMCP stdio server over tools. | `build`, `main` |
+| `localmodel` | 405 |  | `gate`, `endpoint`, `api_key`, `ping`, `max_chars`, `summarize_job`, `passages_for`, `verify_job`, `verify_log` ... |
+| `mcp_server` | 112 | FastMCP stdio server over tools. | `build`, `NotLocal`, `check_local_launch`, `main` |
 | `meta` | 47 | meta.toml read/write (stable field order, empty tables dropped). | `empty`, `read`, `write`, `today` |
 | `net` | 121 | The only HTTP client: sharing check, cache, rate limit, retries. | `Refused`, `NetError`, `Client`, `open_in_browser` |
 | `notes` | 162 |  | `Passage`, `files`, `rel`, `kind_of`, `about`, `level`, `passages` |
@@ -55,7 +57,7 @@ Read it right to left for the foundations: `util`, `sharing`, `keys`, `config`, 
 | `sources.arxiv` | 55 | arXiv API: metadata by id. | `find_id`, `family`, `lookup`, `to_bibtex` |
 | `sources.crossref` | 110 | Crossref works API: by DOI, title query, BibTeX. | `work`, `query`, `issue_year`, `title`, `clean_title`, `first_family`, `tex`, `to_bibtex`, `key_for` |
 | `sources.openalex` | 50 | OpenAlex works: by DOI, reference lists. | `by_doi`, `by_ids`, `cc_licence` |
-| `tools` | 264 | Read-only tools shared by MCP and Ask. | `Tools` |
+| `tools` | 307 | Read-only tools shared by MCP and Ask. | `Tools` |
 | `util` | 38 | Atomic writes and small helpers. | `atomic_write`, `sha256_file`, `short_hash` |
 | `web.app` | 365 | Starlette web app: guard, API routes, git commits of writes. | `Git`, `create_app`, `serve` |
 
@@ -67,7 +69,7 @@ Read it right to left for the foundations: `util`, `sharing`, `keys`, `config`, 
 | `commands/curation_cmds.py` | project, draft. |
 | `commands/derived_cmds.py` | summarize, themes. |
 | `commands/discovery_cmds.py` | candidates, explore, to-fetch. |
-| `commands/guard_cmds.py` | guard (a Claude Code hook), licences, use. |
+| `commands/guard_cmds.py` | guard (a Claude Code hook), licences, use, git-setup, git-check. |
 | `commands/importing.py` | import, import-bib, import-legacy, fetch. |
 | `commands/model_cmds.py` | verify, queue: work for a model the owner runs (see litnav.localmodel). |
 | `commands/reading_cmds.py` | read (reading list), due, recall, quiz. |

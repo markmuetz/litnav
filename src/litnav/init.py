@@ -28,13 +28,15 @@ README = """\
 
 Managed with [litnav](https://github.com/markmuetz/litnav).
 
-**Keep this repository private.** It holds the text extracted from your
-papers (`papers/*/text.txt`). For papers you hold under a publisher or
-university licence, publishing that text is redistribution. To publish this
-repo, set `track_text = false` in `library.toml` first.
+**Keep this repository private.** Papers' text (`papers/*/text.txt`) is not
+tracked (`track_text = false` in `library.toml`): for papers you hold under a
+publisher or university licence, pushing it anywhere is redistribution.
+`litnav extract` regenerates it from the PDFs. A pre-commit check
+(`litnav git-check`) refuses commits that add paper text, figure crops or
+PDFs of papers that aren't open; `litnav git-setup` sets it up in a clone.
 
-- `papers/<key>/`: one folder per paper (`ref.bib`, `meta.toml`, `text.txt`,
-  `summary.json`)
+- `papers/<key>/`: one folder per paper (`ref.bib`, `meta.toml`, `summary.json`;
+  `text.txt`, untracked)
 - the PDFs, `<key>.pdf`: in `pdf_dir` (`library.toml`; default `pdfs/`, not tracked).
   New downloads go in its `_inbox/`.
 - `notes/`, `concepts/`, `topics/`: your own writing. Cite papers as `[@key]`.
@@ -82,6 +84,9 @@ def init(target: Path, *, git: bool = True, licensed_to_models: bool = True, log
         log(f"note: library is in a synced folder; index will live in {cache}")
     atomic_write(root / config.CONFIG_NAME, cfg)
     atomic_write(root / ".gitignore", GITIGNORE)
+    from .githygiene import ALWAYS_RULES, BEGIN, END, TEXT_RULES
+    with open(root / ".gitignore", "a", encoding="utf-8") as f:
+        f.write("\n" + "\n".join([BEGIN, *TEXT_RULES, *ALWAYS_RULES, END]) + "\n")
     atomic_write(root / ".gitattributes", GITATTRIBUTES)
     atomic_write(root / "README.md", README)
     atomic_write(root / "eval" / "questions.toml", EVAL_QUESTIONS)
@@ -92,6 +97,10 @@ def init(target: Path, *, git: bool = True, licensed_to_models: bool = True, log
             keep.touch()
     if git:
         _git_init(root, log)
+        if (root / ".git").exists():
+            from .githygiene import install_hook
+            from .library import Library
+            install_hook(Library(root))
     log(f"created library at {root}")
     return root
 

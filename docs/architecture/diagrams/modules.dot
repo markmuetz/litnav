@@ -2,6 +2,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  node [fontname="Helvetica", fontsize=9, shape=box, style="rounded,filled", height=0.25];
  edge [color="#88888888", arrowsize=0.5];
  "ask" [fillcolor="#DFF3E3"];
+ "asklocal" [fillcolor="#FFF4D6"];
  "batch_runner" [fillcolor="#FFF4D6"];
  "bib" [fillcolor="#FFF4D6"];
  "chunks" [fillcolor="#DCEBFA"];
@@ -13,6 +14,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "embed" [fillcolor="#DCEBFA"];
  "evaluate" [fillcolor="#EEEEEE"];
  "extract" [fillcolor="#EEEEEE"];
+ "githygiene" [fillcolor="#FFF4D6"];
  "graph" [fillcolor="#EEEEEE"];
  "guard" [fillcolor="#FFF4D6"];
  "identify" [fillcolor="#EEEEEE"];
@@ -45,6 +47,11 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "web.app" [fillcolor="#DFF3E3"];
  "ask" -> "sharing";
  "ask" -> "tools";
+ "asklocal" -> "batch_runner";
+ "asklocal" -> "index";
+ "asklocal" -> "localmodel";
+ "asklocal" -> "search";
+ "asklocal" -> "sharing";
  "chunks" -> "sections";
  "chunks" -> "util";
  "cli" -> "config";
@@ -65,6 +72,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "evaluate" -> "sections";
  "evaluate" -> "sharing";
  "extract" -> "util";
+ "githygiene" -> "sharing";
  "graph" -> "index";
  "graph" -> "sharing";
  "graph" -> "sources.openalex";
@@ -101,6 +109,8 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "index" -> "notes";
  "index" -> "sections";
  "init" -> "config";
+ "init" -> "githygiene";
+ "init" -> "library";
  "init" -> "util";
  "library" -> "bib";
  "library" -> "config";
@@ -118,6 +128,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "localmodel" -> "sharing";
  "localmodel" -> "util";
  "mcp_server" -> "library";
+ "mcp_server" -> "sharing";
  "mcp_server" -> "tools";
  "meta" -> "util";
  "net" -> "sharing";
@@ -140,6 +151,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "sources.crossref" -> "keys";
  "sources.crossref" -> "net";
  "sources.openalex" -> "net";
+ "tools" -> "asklocal";
  "tools" -> "index";
  "tools" -> "localmodel";
  "tools" -> "notes";
