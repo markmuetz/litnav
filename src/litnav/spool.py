@@ -16,7 +16,7 @@ Configure in .litnav/local.toml:
     host = "sci-host.example.org"          # ssh host (your ssh config does the rest)
     spool = "~/litnav-spool"               # on the cluster; made private to you (chmod 700)
     submit = "sbatch --export=ALL,LLM_SPOOL=$HOME/litnav-spool /path/to/worker.sbatch"
-    job_name = "llm-batch"                 # the worker's SLURM job name (to see if one is queued)
+    job_name = "llm-batch"                 # the worker's SLURM job name(s) (to see if one is queued)
 
 A batch holds the text of the papers its jobs need: the spool lives in your
 own account, and finished batches are deleted when pulled.
@@ -137,6 +137,8 @@ def worker_job(cfg) -> str:
     name = cfg.get("job_name")
     if not name:
         return ""
+    if isinstance(name, list):              # several jobs can work the spool (e.g. a self-test + batch)
+        name = ",".join(name)
     return _ssh(cfg, f"squeue -h -u $USER -n {shlex.quote(name)} -o '%i %T %M %l %R' | head -1").strip()
 
 
