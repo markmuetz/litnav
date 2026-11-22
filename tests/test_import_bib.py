@@ -77,3 +77,15 @@ def test_legacy_pdf_in_subfolder_used_in_place(lib, tmp_path):
     it = lib.get("ipcc2021wg1ch01")
     assert it.has_pdf and it.pdf_path == sub / "ipcc2021wg1ch01.pdf"
     assert not (lib.pdf_dir / "ipcc2021wg1ch01.pdf").exists()
+
+
+def test_import_bib_extracts_text(lib, tmp_path, monkeypatch):
+    from litnav import extract
+    monkeypatch.setattr(extract, "pdf_text", lambda p: "Cold pools and MCS propagation. " * 200)
+    pdf = tmp_path / "x.pdf"
+    pdf.write_bytes(b"%PDF-1.4 x")
+    b = tmp_path / "my.bib"
+    b.write_text("@article{a, title = {Cold Pools}, author = {Smith, Jane}, year = {2021},"
+                 " file = {%s}}\n" % pdf)
+    bibtex.apply(lib, bibtex.plan(lib, b, log=lambda *a: None), log=lambda *a: None)
+    assert lib.get("smith2021cold").has_text

@@ -29,6 +29,17 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
 
 
+@pytest.fixture(autouse=True)
+def owner_shell(monkeypatch, tmp_path_factory):
+    """Tests run as the owner at a terminal (not inside an agent's shell, even
+    when the test run itself is), with no per-user default library."""
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.delenv("LITNAV_AGENT", raising=False)
+    monkeypatch.delenv("LITNAV_LIBRARY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg")))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
+
+
 @pytest.fixture
 def lib(tmp_path):
     root = init(tmp_path / "lib", git=False, log=lambda *a: None)

@@ -7,6 +7,7 @@ import textwrap
 from pathlib import Path
 
 from .. import index, search
+from .. import sharing as S
 from ..library import Library
 
 
@@ -83,6 +84,9 @@ def cmd_search(a):
             if "no such table" in str(e):
                 raise ValueError("notes are not indexed yet: run `litnav index`")
             raise
+        if lib.cli_purpose() != S.LOCAL:          # an agent's shell: each note's own level
+            from .. import notes as N
+            res = [r for r in res if S.allow(N.level(lib, r["path"]), lib.cli_purpose())]
         if a.json:
             print(json.dumps(res, indent=1))
             return
@@ -98,6 +102,7 @@ def cmd_search(a):
         res = search.papers(con, a.query, embedder=emb, k=a.k, filters=f)
     else:
         res = search.search(con, a.query, embedder=emb, mode=a.mode, k=a.k, filters=f)
+    withheld = _withhold(lib, res)
     if a.json:
         print(json.dumps(res, indent=1))
         return
@@ -111,6 +116,34 @@ def cmd_search(a):
             print(f"  id: {r['id']}")
             print(textwrap.indent(textwrap.fill(r["text"][:500], 100), "    "))
         print()
+    if withheld:
+        print(f"({withheld} result(s) from papers whose text may not go to a model: text withheld. "
+              "Check a claim with `litnav verify KEY \"claim\"`.)", file=sys.stderr)
+
+
+WITHHELD = "[text withheld: this paper's text may not go to a model; use `litnav verify`]"
+
+
+def _withhold(lib, res) -> int:
+    """Inside an agent's shell, blank the text of passages from papers that
+    may not be sent to a model. Keys, titles and sections stay: they are
+    metadata, which lookups send anyway."""
+    purpose = lib.cli_purpose()
+    if purpose == S.LOCAL:
+        return 0
+    n, ok = 0, {}
+    for r in res:
+        k = r["key"]
+        if k not in ok:
+            ok[k] = lib.get(k).allowed(purpose)
+        if ok[k]:
+            continue
+        n += 1
+        if "text" in r:
+            r["text"] = WITHHELD
+        if r.get("best_passage"):
+            r["best_passage"] = dict(r["best_passage"], text=WITHHELD)
+    return n
 
 
 def cmd_similar(a):

@@ -16,8 +16,11 @@ def add(sub):
     p.add_argument("--limit", type=int)
     p.add_argument("--force", action="store_true", help="redo papers that already have a summary")
     p.add_argument("--stale", action="store_true", help="also redo summaries whose text has changed")
-    p.add_argument("--via", choices=["api", "claude-code"],
-                   help="default: api if ANTHROPIC_API_KEY is set, else claude-code")
+    p.add_argument("--via", choices=["api", "claude-code", "local", "queue"],
+                   help="api, claude-code (outside models: only papers whose text may be sent out), "
+                        "local ([local_model] in library.toml, e.g. Ollama), or queue (add to the "
+                        "batch for a bigger model: `litnav queue export`). Default: local if "
+                        "[local_model] is set, else api if ANTHROPIC_API_KEY is set, else claude-code")
     p.add_argument("--model", help=f"default: {derived.SUMMARY_MODEL} (api), "
                    f"{derived.CLAUDE_CODE_SUMMARY_MODEL} (claude-code)")
     p.add_argument("--dry-run", "-n", action="store_true", help="list what would be summarized")
@@ -28,9 +31,11 @@ def add(sub):
     add_themes(sub)
 
 
-def _via(a):
+def _via(a, lib=None):
     if a.via:
         return a.via
+    if lib is not None and lib.local_model.get("url"):
+        return "local"
     try:
         import anthropic  # noqa: F401
         has_sdk = True
@@ -39,9 +44,36 @@ def _via(a):
     return "api" if has_sdk and os.environ.get("ANTHROPIC_API_KEY") else "claude-code"
 
 
+def _summarize_local(lib, a, via):
+    from .. import localmodel, sharing as S
+    items = derived.select(lib, keys=a.keys, tag=a.tag, force=a.force, stale=a.stale, limit=a.limit,
+                           purpose=S.LOCAL_MODEL)
+    if not items:
+        print("Nothing to summarize.")
+        return
+    if a.dry_run:
+        print(f"{len(items)} paper(s) to summarize via {via}")
+        for it in items:
+            print(f"  {it.key}")
+        return
+    jobs = [localmodel.summarize_job(it) for it in items]
+    if via == "queue":
+        n = localmodel.enqueue(lib, jobs)
+        print(f"queued {n} summary job(s) ({len(jobs) - n} already queued); "
+              "`litnav queue export DIR` for a batch run")
+        return
+    url, model, _ = localmodel.endpoint(lib)
+    print(f"{len(items)} paper(s) to summarize with {model} at {url}. Safe to interrupt: "
+          "finished summaries are kept.", file=sys.stderr)
+    st = localmodel.run_now(lib, jobs, log=lambda m: print(m, file=sys.stderr))
+    _reindex(lib, [s["key"] for s in st if s["status"] == "ok"])
+
+
 def cmd_summarize(a):
     lib = Library.find(a.library)
-    via = _via(a)
+    via = _via(a, lib)
+    if via in ("local", "queue"):
+        return _summarize_local(lib, a, via)
     if via == "api" and derived.state_path(lib).exists():
         written, done = derived.api_collect(lib)
         _reindex(lib, written)

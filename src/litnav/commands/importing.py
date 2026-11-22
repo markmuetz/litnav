@@ -15,6 +15,12 @@ def add(sub):
     p.add_argument("--from-plan", action="store_true", help="apply the last plan without re-querying")
     p.add_argument("--doi", help="use this DOI (single file)")
     p.add_argument("--key", help="use this key (single file)")
+    p.add_argument("--title", help="metadata by hand, for a paper with no DOI or arXiv id "
+                   "(single file; needs --author and --year): nothing is looked up")
+    p.add_argument("--author", action="append", default=[],
+                   help="'Family, Given' (repeat for each author, in order)")
+    p.add_argument("--year")
+    p.add_argument("--journal", help="makes it an @article (else @misc)")
     p.add_argument("--tag", "-t", action="append", default=[])
     p.add_argument("--confidential", action="store_true",
                    help="never read or look up these files; needs --key or a canonical filename")
@@ -73,16 +79,27 @@ def cmd_import(a):
     elif a.files:
         tag = importer.CONFIDENTIAL_DIR if a.confidential else ""
         files = [(Path(f).expanduser().resolve(), tag) for f in a.files]
-        if (a.doi or a.key) and len(files) > 1:
-            raise ValueError("--doi/--key need a single file")
+        if (a.doi or a.key or a.title) and len(files) > 1:
+            raise ValueError("--doi/--key/--title need a single file")
     else:
         files = importer.inbox_files(lib)
+    manual = None
+    if a.title or a.author or a.year or a.journal:
+        if not a.files:
+            raise ValueError("--title/--author/--year/--journal need a file named")
+        manual = importer.check_manual({"title": a.title, "author": " and ".join(a.author),
+                                        "year": a.year, "journal": a.journal})
     print(f"{'APPLY' if a.apply else 'DRY RUN'}: {len(files)} PDFs", file=sys.stderr)
-    rows = importer.plan(lib, files, doi=a.doi, key=a.key)
+    rows = importer.plan(lib, files, doi=a.doi, key=a.key, manual=manual)
     importer.write_plan(lib, rows)
     from collections import Counter
     print("  " + "  ".join(f"{k}={v}" for k, v in Counter(r["status"] for r in rows).most_common()),
           file=sys.stderr)
+    if any(r["status"] == "no-match" for r in rows):
+        print("no-match: no DOI, arXiv id or title match. If the paper has none yet (an accepted "
+              "manuscript, a report), import it by name with its metadata: litnav import FILE "
+              "--title T --author 'Family, Given' [--author ...] --year Y [--journal J]",
+              file=sys.stderr)
     if a.apply:
         c = importer.apply(lib, rows, tags=a.tag, mode="move" if a.move else None)
         print(c, file=sys.stderr)

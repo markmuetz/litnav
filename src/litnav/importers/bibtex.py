@@ -104,6 +104,12 @@ def apply(lib, rows, *, tags=(), keep_keywords_as_tags=False, log=print) -> dict
             it.meta.setdefault("files", {})["pdf"] = False
         it.save_meta()
         lib.invalidate()
+        if r["path"]:
+            from ..extract import extract_item      # as `litnav import` does; never for confidential
+            try:
+                extract_item(lib.get(r["key"]), log=log)
+            except Exception as e:                  # a broken PDF must not stop the import
+                log(f"  {r['key']}: no text ({e}); try `litnav extract {r['key']}`")
         c["imported"] += 1
     log(f"imported {c['imported']}, already held {c['held']}, not imported {c['left']}")
     return c

@@ -111,3 +111,21 @@ and what was not found.>
   give it front matter `sharing: confidential`, which keeps it off every
   model-facing tool. A note that cites a confidential item is withheld
   automatically.
+
+## Papers whose text is withheld
+
+When the library does not allow licensed text to go to models, search
+results from those papers say `[withheld ...]` (`text_withheld: true`), and
+`get_section` refuses them. Don't guess what such a passage says, and don't
+read the paper's files or PDF another way. Check a claim with
+`verify_claim(key, claim)` (or `litnav verify KEY "claim"`): the user's local
+model reads the paper and returns a verdict, confidence and location.
+Report it as the local model's verdict, with its confidence, and point the
+user to the location to check. A `queued` verdict means it runs in the
+user's next batch: say so rather than answering. Summaries (`get_paper`)
+stay available.
+
+For a question that needs *reading* such papers (what a paper argues, how two
+papers compare), call `ask_local_model(question, keys)` (or `litnav ask-local
+"question" -k KEY`): the local model reads them and answers in its own words
+with citations. Pass that on as the local model's answer, and say it is one.

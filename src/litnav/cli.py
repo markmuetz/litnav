@@ -9,7 +9,7 @@ import sys
 from . import __version__
 
 COMMANDS = ["core", "importing", "text", "searching", "refs", "reading_cmds", "derived_cmds",
-            "discovery_cmds", "curation_cmds", "web_cmds"]
+            "discovery_cmds", "curation_cmds", "web_cmds", "model_cmds", "guard_cmds"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,6 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"litnav {__version__}")
     p.add_argument("--library", "-L", help="library directory (default: $LITNAV_LIBRARY "
                    "or the nearest parent with library.toml)")
+    p.add_argument("--model-profile", "-M", help="local model endpoint: a [local_model.profiles] "
+                   "name, e.g. orchid (default: $LITNAV_MODEL_PROFILE, then [local_model] profile)")
     sub = p.add_subparsers(dest="command", metavar="<command>")
     for name in COMMANDS:
         try:
@@ -33,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     p = build_parser()
     args = p.parse_args(argv)
+    if getattr(args, "model_profile", None):
+        import os
+        os.environ["LITNAV_MODEL_PROFILE"] = args.model_profile      # also for subprocesses
     if not getattr(args, "func", None):
         p.print_help()
         return 1

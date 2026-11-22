@@ -17,6 +17,12 @@ filename is caught. Outcomes:
                   _variants/<key>.<date>.pdf (never deleted)
   low-confidence  metadata found but not verified in the text: left in place
   no-match        nothing found: left in place
+
+A paper with no DOI or arXiv id (an accepted manuscript, a report) is
+imported with its metadata given by hand (`--title --author --year
+[--journal]`, single file). Nothing is looked up; the title is still checked
+against the PDF's opening text, so the wrong file is caught. `litnav check`
+lists such articles ("article without a DOI") until a DOI is added.
 """
 from __future__ import annotations
 
@@ -28,7 +34,7 @@ from dataclasses import asdict, fields
 from pathlib import Path
 
 from . import bib, keys
-from .identify import Proposal, identify
+from .identify import Proposal, identify, verify
 from .net import Client
 from .util import sha256_file
 
@@ -92,6 +98,55 @@ class Catalogue:
             self.by_tya.setdefault(self._tya(p.title, p.year, p.extra.get("author", "")), p.key)
 
 
+def manual_bibtex(key: str, manual: dict) -> str:
+    """A ref.bib entry from metadata given by hand: title, author (BibTeX
+    form, `Family, Given and ...`), year, and optionally journal."""
+    from .sources.crossref import tex
+    f = [("title", tex(manual["title"])), ("author", tex(manual["author"]))]
+    if manual.get("journal"):
+        f.append(("journal", tex(manual["journal"])))
+    f.append(("year", str(manual["year"])))
+    body = ",\n".join(f"    {n} = {{{v}}}" for n, v in f)
+    etype = "article" if manual.get("journal") else "misc"
+    return f"@{etype}{{{key},\n{body}\n}}\n"
+
+
+def check_manual(manual: dict) -> dict:
+    missing = [k for k in ("title", "author", "year") if not manual.get(k)]
+    if missing:
+        raise ValueError("metadata by hand needs --title, --author and --year (missing: "
+                         + ", ".join("--" + k for k in missing) + ")")
+    if not keys.plausible_year(manual["year"]):
+        raise ValueError(f"implausible year {manual['year']!r}")
+    return manual
+
+
+def _manual_proposal(lib, path: Path, manual: dict, key: str | None, cat, *, read: bool) -> Proposal:
+    """No lookup. Unless `read` is False (confidential), the title must be
+    found in the PDF's opening text, as for an identifier match."""
+    from . import extract
+    p = Proposal(file=path.name, via="manual", title=manual["title"], year=int(manual["year"]),
+                 extra={"author": manual["author"]})
+    p.key = key or keys.derive_unique(keys.surname(manual["author"]), manual["year"],
+                                      manual["title"], cat.exists,
+                                      extra_stop=lib.config["keys"].get("extra_stop_words", [])) or ""
+    if not p.key or keys.validate(p.key):
+        p.status = "no-key"
+        return p
+    p.bibtex = manual_bibtex(p.key, manual)
+    if key and cat.exists(key):
+        p.status = "collides"
+        return p
+    if read:
+        text, _ = extract.head(path, pages=5)
+        p.score = verify(p.title, text)
+        bar = lib.config.get("import", {}).get("verify_identifier", 0.6)
+        p.status = "ok" if p.score >= bar else "low-confidence"
+    else:
+        p.status = "ok"
+    return p
+
+
 def inbox_files(lib) -> list[tuple[Path, str]]:
     """(path, tag) for every PDF in the inbox; tag is the first subdirectory."""
     out = []
@@ -107,17 +162,27 @@ def inbox_files(lib) -> list[tuple[Path, str]]:
     return out
 
 
-def plan(lib, files: list[tuple[Path, str]], *, doi=None, key=None, client=None,
-         log=print) -> list[dict]:
-    client = client or Client.for_library(lib)
+def plan(lib, files: list[tuple[Path, str]], *, doi=None, key=None, manual=None,
+         client=None, log=print) -> list[dict]:
+    if manual:
+        check_manual(manual)
+        if len(files) != 1 or doi:
+            raise ValueError("metadata by hand is for a single file, without --doi")
+    client = client if (client or manual) else Client.for_library(lib)
     cat = Catalogue(lib)
     rows = []
     for i, (path, tag) in enumerate(files, 1):
         sha = sha256_file(path)
         if tag == CONFIDENTIAL_DIR:
-            p = Proposal(file=path.name, via="confidential")
-            k = key or path.stem
-            if keys.validate(k):
+            if manual:          # never read: the title is not checked against the text
+                p = _manual_proposal(lib, path, manual, key, cat, read=False)
+                p.via = "confidential+manual"
+            else:
+                p = Proposal(file=path.name, via="confidential")
+                k = key or path.stem
+            if manual:
+                pass
+            elif keys.validate(k):
                 p.status = "needs-key"
             elif cat.exists(k):
                 p.status, p.key = "collides", k
@@ -127,7 +192,9 @@ def plan(lib, files: list[tuple[Path, str]], *, doi=None, key=None, client=None,
             conf = True
         else:
             conf = False
-            if key:
+            if manual:
+                p = _manual_proposal(lib, path, manual, key, cat, read=True)
+            elif key:
                 p = identify(path, client, lambda k_: False, cfg=lib.config, doi=doi)
                 if p.status in ("ok", "low-confidence") and p.bibtex:
                     e = bib.parse(p.bibtex)
@@ -204,6 +271,14 @@ def apply(lib, rows, *, tags=(), mode: str | None = None, log=print) -> dict:
                 m.setdefault("ids", {})["arxiv"] = r["arxiv"]
             if r.get("via"):
                 m.setdefault("files", {})["identified_via"] = r["via"]
+            if r.get("licence") and not conf:
+                from . import licences
+                c = licences.code(r["licence"])
+                m["licence"] = {"source": "crossref", "checked": dt.date.today().isoformat(),
+                                "url": r["licence"], "code": c}
+                if c in licences.open_codes(lib) and it.sharing == "licensed":
+                    m["sharing"] = "open"
+                    log(f"  {r['key']}: {c} licence, so sharing is open")
             it.save_meta()
             if not conf:
                 from .extract import extract_item

@@ -72,9 +72,9 @@ def outbound(lib, items, what="text"):
 
 # ---- selection and writing
 
-def text_for(it) -> tuple[str, bool]:
+def text_for(it, max_chars: int = MAX_TEXT_CHARS) -> tuple[str, bool]:
     t = it.text().strip()
-    return t[:MAX_TEXT_CHARS], len(t) > MAX_TEXT_CHARS
+    return t[:max_chars], len(t) > max_chars
 
 
 def is_current(it, model: str) -> bool:
@@ -88,14 +88,21 @@ def is_current(it, model: str) -> bool:
             and p.get("prompt_version") == PROMPT_VERSION)
 
 
-def select(lib, *, keys=None, tag=None, force=False, stale=False, limit=None, model=SUMMARY_MODEL):
-    """Items to summarize: have text, may be sent out, and lack a summary
-    (or, with --stale, whose text changed since; with --force, all)."""
+def select(lib, *, keys=None, tag=None, force=False, stale=False, limit=None, model=SUMMARY_MODEL,
+           purpose=S.SEND_OUT):
+    """Items to summarize: have text, may go to the model (`send_out`, or
+    `local_model` for a model the owner runs), and lack a summary (or, with
+    --stale, whose text changed since; with --force, all)."""
     if keys:
         items = [lib.get(k) for k in keys]
-        outbound(lib, items)
+        if purpose == S.SEND_OUT:
+            outbound(lib, items)
+        else:
+            for it in items:
+                if not it.allowed(purpose):
+                    raise Refused(f"{it.key}: text not sent to a model ({it.sharing})")
     else:
-        items = list(lib.items(purpose=S.SEND_OUT, tag=tag))
+        items = list(lib.items(purpose=purpose, tag=tag))
     out = []
     for it in items:
         if not it.has_text:
@@ -355,9 +362,10 @@ def keys_in_report(report: str) -> set[str]:
 
 def theme_inputs(lib, tag=None) -> list[tuple[str, dict]]:
     """(key, summary) for papers whose summary may go to a model *now*: a
-    summary written before a sharing change is filtered by today's level."""
+    summary written before a sharing change is filtered by today's level.
+    Summaries are model-written, so `send_derived` decides, not `send_out`."""
     out = []
-    for it in lib.items(purpose=S.SEND_OUT, tag=tag):
+    for it in lib.items(purpose=S.SEND_DERIVED, tag=tag):
         s = it.summary()
         if s:
             out.append((it.key, s))

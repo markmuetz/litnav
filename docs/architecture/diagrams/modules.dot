@@ -2,6 +2,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  node [fontname="Helvetica", fontsize=9, shape=box, style="rounded,filled", height=0.25];
  edge [color="#88888888", arrowsize=0.5];
  "ask" [fillcolor="#DFF3E3"];
+ "batch_runner" [fillcolor="#FFF4D6"];
  "bib" [fillcolor="#FFF4D6"];
  "chunks" [fillcolor="#DCEBFA"];
  "cli" [fillcolor="#DFF3E3"];
@@ -13,6 +14,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "evaluate" [fillcolor="#EEEEEE"];
  "extract" [fillcolor="#EEEEEE"];
  "graph" [fillcolor="#EEEEEE"];
+ "guard" [fillcolor="#FFF4D6"];
  "identify" [fillcolor="#EEEEEE"];
  "importer" [fillcolor="#EEEEEE"];
  "importers.bibtex" [fillcolor="#EEEEEE"];
@@ -21,6 +23,8 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "init" [fillcolor="#EEEEEE"];
  "keys" [fillcolor="#FFF4D6"];
  "library" [fillcolor="#FFF4D6"];
+ "licences" [fillcolor="#FFF4D6"];
+ "localmodel" [fillcolor="#FFF4D6"];
  "mcp_server" [fillcolor="#DFF3E3"];
  "meta" [fillcolor="#FFF4D6"];
  "net" [fillcolor="#F3E5F5"];
@@ -65,8 +69,12 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "graph" -> "sharing";
  "graph" -> "sources.openalex";
  "graph" -> "util";
+ "guard" -> "config";
+ "guard" -> "library";
+ "guard" -> "sharing";
  "identify" -> "extract";
  "identify" -> "keys";
+ "identify" -> "licences";
  "identify" -> "sources.arxiv";
  "identify" -> "sources.crossref";
  "importer" -> "bib";
@@ -74,9 +82,12 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "importer" -> "extract";
  "importer" -> "identify";
  "importer" -> "keys";
+ "importer" -> "licences";
  "importer" -> "net";
+ "importer" -> "sources.crossref";
  "importer" -> "util";
  "importers.bibtex" -> "bib";
+ "importers.bibtex" -> "extract";
  "importers.bibtex" -> "identify";
  "importers.bibtex" -> "importer";
  "importers.bibtex" -> "keys";
@@ -97,6 +108,15 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "library" -> "meta";
  "library" -> "sharing";
  "library" -> "util";
+ "licences" -> "sharing";
+ "licences" -> "sources.crossref";
+ "localmodel" -> "batch_runner";
+ "localmodel" -> "derived";
+ "localmodel" -> "index";
+ "localmodel" -> "net";
+ "localmodel" -> "search";
+ "localmodel" -> "sharing";
+ "localmodel" -> "util";
  "mcp_server" -> "library";
  "mcp_server" -> "tools";
  "meta" -> "util";
@@ -121,6 +141,7 @@ digraph G { graph [rankdir=LR, fontname="Helvetica", ranksep=1.1, nodesep=0.12, 
  "sources.crossref" -> "net";
  "sources.openalex" -> "net";
  "tools" -> "index";
+ "tools" -> "localmodel";
  "tools" -> "notes";
  "tools" -> "projects";
  "tools" -> "reading";

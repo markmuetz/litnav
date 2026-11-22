@@ -177,7 +177,10 @@ def test_config_reloaded(ilib):
     p.write_text(p.read_text().replace("licensed_to_models = true", "licensed_to_models = false"))
     os.utime(p, ns=(time.time_ns() + 10**9,) * 2)
     t = Tools(ilib, purpose=S.SEND_OUT, embedder=None)
-    assert "smith2021cold" not in {h["key"] for h in t.search_literature("cold pools", k=50, mode="keyword")}
+    hits = [h for h in t.search_literature("cold pools", k=50, mode="keyword") if h["key"] == "smith2021cold"]
+    # still found (metadata), but its text is withheld once licensed text may not go to models
+    assert hits and all(h.get("text_withheld") and "cold" not in h["text"].split("withheld")[0]
+                        for h in hits)
 
 
 def test_rename_reads_notes_first(lib):

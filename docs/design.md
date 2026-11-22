@@ -208,6 +208,16 @@ is primarily for one user, so one answer per library). With `false`,
 `send_out` is mapped to a stricter purpose that admits `open` and `private`
 text only; metadata still goes, as it does for lookups.
 
+For such a library (added 2026-11-22): summaries and claim checks run on a
+model the owner runs (`local_model`: this machine, or a batch on the owner's
+HPC account), which may read `licensed` text. What comes back is
+model-written (`send_derived`) and may go to an outside model; the paper's
+words do not. Search results from licensed papers keep their location and
+withhold their text. `litnav licences` marks Creative Commons papers `open`
+from Crossref's licence records, and a Claude Code hook (`litnav guard`)
+refuses an agent's direct reads of licensed text and PDFs. See
+`docs/local-models.md`.
+
 Enforced in one place: `Library.items(purpose=...)`, where `purpose` is
 `local`, `send_out` or `serve_others`. Every command and MCP tool asks for the
 purpose it needs. Tests assert that no code path reaches an outside service

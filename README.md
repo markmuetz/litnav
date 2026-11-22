@@ -56,7 +56,8 @@ claude plugin marketplace add markmuetz/litnav
 claude plugin install litnav@litnav
 ```
 
-Run Claude Code inside your library (or set `LITNAV_LIBRARY`).
+Run Claude Code inside your library, set `LITNAV_LIBRARY`, or make it your default with
+`litnav use <dir>`.
 
 ## Sharing levels
 
@@ -64,6 +65,13 @@ Every paper has one: `open`, `licensed` (the default), `private` or
 `confidential`. They decide what may be sent to a model or an outside
 service. `confidential` items (co-authored drafts, say) are never extracted,
 looked up, summarised or shown to any tool.
+
+If your papers' licences don't allow sending their text to an outside model,
+set `licensed_to_models = false`: summaries and claim checks then run on a
+model you run yourself (Ollama on your laptop, or a batch on a GPU cluster),
+`litnav licences` marks Creative Commons papers open, a Claude Code hook
+keeps agents out of the rest, and `litnav ask-local` lets your agent hand a
+question about those papers to your local model. See [`docs/local-models.md`](docs/local-models.md).
 
 ## Licence
 

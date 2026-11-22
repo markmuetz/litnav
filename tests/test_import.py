@@ -124,3 +124,74 @@ def test_helpers():
     assert marker_for("Supporting_Information") == "supporting"
     assert verify("Cold pools and the propagation of convective systems", TEXT_A) == 1.0
     assert verify("Svalbard auroral emissions in winter", TEXT_A) == 0.0
+
+
+TEXT_MS = """manuscript submitted to Journal of Advances in Modeling Earth Systems (JAMES)
+Tracers Computed with a Mixed Online/Offline Method for Process Studies
+Ann B. Example, Carl Sample
+Key Points: an efficient method for back and forward tracers.""" + " body" * 50
+
+MANUAL = {"title": "Tracers Computed with a Mixed Online/Offline Method "
+                   "for Process Studies",
+          "author": "Example, Ann B. and Sample, Carl", "year": "2026",
+          "journal": "Journal of Advances in Modeling Earth Systems"}
+
+
+def test_manual_metadata_imports_a_paper_with_no_doi(lib, pdfs):
+    f = pdfs("Mixed_Online_Offline.pdf", TEXT_MS)
+    c = FakeClient({})
+    rows = importer.plan(lib, [(f, "")], manual=MANUAL, client=c, log=lambda *a: None)
+    assert c.calls == []                                 # nothing looked up
+    assert rows[0]["status"] == "ok" and rows[0]["key"] == "example2026tracers"
+    assert rows[0]["via"] == "manual"
+    importer.apply(lib, rows, log=lambda *a: None)
+    it = lib.get("example2026tracers")
+    assert it.has_pdf and it.entry.type == "article" and not it.doi
+    assert it.year == "2026" and "Sample" in it.entry.get("author")
+    assert it.meta["files"]["identified_via"] == "manual"
+    from litnav.commands.core import check_item
+    assert "article without a DOI" in check_item(it)     # flagged until a DOI is added
+    # the same paper again is held, not a second item
+    g = pdfs("again.pdf", TEXT_MS)
+    rows = importer.plan(lib, [(g, "")], manual=MANUAL, client=c, log=lambda *a: None)
+    assert rows[0]["status"] == "held" and rows[0]["dup_of"] == "example2026tracers"
+
+
+def test_manual_metadata_checks_the_title_against_the_pdf(lib, pdfs):
+    f = pdfs("wrong.pdf", TEXT_A)                        # a different paper
+    rows = importer.plan(lib, [(f, "")], manual=MANUAL, key="example2026x",
+                         client=FakeClient({}), log=lambda *a: None)
+    assert rows[0]["status"] == "low-confidence" and rows[0]["key"] == "example2026x"
+
+
+def test_manual_metadata_confidential_is_never_read(lib, pdfs, monkeypatch):
+    f = pdfs("draft.pdf", TEXT_MS, sub="_confidential")
+    monkeypatch.setattr(extract, "head", lambda *a, **k: pytest.fail("read a confidential file"))
+    rows = importer.plan(lib, importer.inbox_files(lib), manual=MANUAL,
+                         client=FakeClient({}), log=lambda *a: None)
+    assert rows[0]["status"] == "ok" and rows[0]["confidential"] == "yes"
+    importer.apply(lib, rows, log=lambda *a: None)
+    it = lib.get("example2026tracers")
+    assert it.sharing == "confidential" and it.entry.type == "article"
+
+
+def test_manual_metadata_needs_title_author_year():
+    with pytest.raises(ValueError, match="--author"):
+        importer.check_manual({"title": "T", "author": "", "year": "2026"})
+    with pytest.raises(ValueError, match="implausible"):
+        importer.check_manual({"title": "T", "author": "A, B", "year": "26"})
+
+
+def test_cli_no_match_suggests_metadata_by_hand(lib, pdfs, monkeypatch, capsys):
+    from litnav import cli
+    from litnav.identify import Proposal
+    f = pdfs("x.pdf", TEXT_MS)
+    monkeypatch.setattr(importer, "identify", lambda *a, **k: Proposal(file="x.pdf", status="no-match"))
+    monkeypatch.setattr(importer.Client, "for_library", classmethod(lambda cls, lib: FakeClient({})))
+    assert cli.main(["-L", str(lib.root), "import", str(f)]) == 0
+    assert "--title T --author" in capsys.readouterr().err
+    assert cli.main(["-L", str(lib.root), "import", str(f), "--title", MANUAL["title"],
+                     "--author", "Example, Ann B.", "--author", "Sample, Carl",
+                     "--year", "2026", "--apply"]) == 0
+    it = lib.get("example2026tracers")
+    assert it.entry.type == "misc" and "Sample, Carl" in it.entry.get("author")

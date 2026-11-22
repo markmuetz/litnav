@@ -11,7 +11,10 @@ description: Keep a litnav library clean — import PDFs from the inbox, verify 
 |---|---|
 | `litnav import [paths] [--apply]` | import PDFs (default: everything in `<pdf_dir>/_inbox/`); dry run unless `--apply` |
 | `litnav import --from-downloads [HOURS]` | list PDFs downloaded in the last HOURS (default 2), identical re-downloads skipped; nothing is looked up until `--apply` |
+| `litnav import FILE --title T --author 'Family, Given' [--author ...] --year Y [--journal J]` | a paper with no DOI or arXiv id yet (accepted manuscript, report): metadata from its title page, nothing looked up; the title is still checked against the PDF. `litnav check` lists it ("article without a DOI") until one is added |
 | `litnav import-bib <file.bib>` | import from Zotero/JabRef/Mendeley exports |
+| `litnav licences [--apply]` | look up licences (Crossref) and mark CC BY/BY-SA/CC0 papers open; new imports are checked automatically |
+| `litnav summarize --via local\|queue`, `litnav queue add\|list\|export\|import` | summaries and claim checks on the user's own model, now or as a batch for JASMIN/ORCHID (`docs/local-models.md`) |
 | `litnav check` | keys, implausible years, missing bibs and DOIs |
 | `litnav normalise [keys]` | bring `ref.bib` into house style (idempotent) |
 | `litnav rename <old> <new>` | rename; the old key stays as an alias, `[@old]` still resolves |
@@ -54,3 +57,16 @@ never send anything about them to a model or an outside service — no text
 extraction, summary, OCR, or DOI/title lookup. Handle only the key, title,
 authors, where the canonical version lives, and the version history. litnav
 enforces this in its tools; don't work around it with direct file access.
+
+## Papers whose text is withheld
+
+When the library does not allow licensed text to go to models, search
+results from those papers say `[withheld ...]` (`text_withheld: true`), and
+`get_section` refuses them. Don't guess what such a passage says, and don't
+read the paper's files or PDF another way. Check a claim with
+`verify_claim(key, claim)` (or `litnav verify KEY "claim"`): the user's local
+model reads the paper and returns a verdict, confidence and location.
+Report it as the local model's verdict, with its confidence, and point the
+user to the location to check. A `queued` verdict means it runs in the
+user's next batch: say so rather than answering. Summaries (`get_paper`)
+stay available.

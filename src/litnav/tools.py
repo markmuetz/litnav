@@ -18,8 +18,11 @@ MAX_SECTION_CHARS = 12000
 
 
 class Tools:
-    def __init__(self, lib, purpose: str = S.SEND_OUT, embedder=None):
+    def __init__(self, lib, purpose: str = S.SEND_OUT, embedder=None, access_log=None):
         self.lib, self.purpose = lib, lib.purpose(purpose)
+        # keys whose text was handed out (a local agent's run: litnav ask-local
+        # scrubs its answer against these papers)
+        self.access_log = access_log
         # Metadata (title, authors, keys, section titles) still goes to the model
         # when the owner said no to licensed text: it is what lookups send anyway.
         self.meta_purpose = S.LOOKUP if self.purpose == S.SEND_OUT_STRICT else self.purpose
@@ -68,7 +71,14 @@ class Tools:
             need = S.SERVE_TEXT
         if not it.allowed(need):
             raise PermissionError(f"{k} is not available for this use ({it.sharing})")
+        if need_text:
+            self._accessed([it.key])
         return it
+
+    def _accessed(self, keys):
+        if self.access_log and keys:
+            with open(self.access_log, "a", encoding="utf-8") as f:
+                f.write("".join(f"{k}\n" for k in dict.fromkeys(keys)))
 
     # -- tools
 
@@ -80,14 +90,87 @@ class Tools:
         f = search.Filters(year_from=year_from, year_to=year_to, tag=tag, author=author,
                            keys=self._project_keys(project))
         purpose = S.SERVE_TEXT if self.purpose == S.SERVE_META and not papers else self.purpose
+        # Strict policy: search licensed papers too, but return where, not what,
+        # so the agent knows a paper matched and can ask for a verdict.
+        strict = self.purpose == S.SEND_OUT_STRICT
+        sp = self.meta_purpose if strict else purpose
         if papers:
-            return self._live(search.papers(self.con, query, embedder=self.embedder, k=k, filters=f,
-                                            purpose=purpose), purpose)
+            res = self._live(search.papers(self.con, query, embedder=self.embedder, k=k, filters=f,
+                                           purpose=sp), sp)
+            return [self._withheld(r, "best_passage") for r in res] if strict else res
         res = self._live(search.search(self.con, query, embedder=self.embedder, mode=mode, k=k,
-                                       filters=f, purpose=purpose), purpose)
+                                       filters=f, purpose=sp), sp)
         keep = ("id", "key", "title", "year", "authors", "section_title", "kind", "start", "end",
                 "text", "score")
-        return [{x: r.get(x) for x in keep} for r in res]
+        out = [{x: r.get(x) for x in keep} for r in res]
+        if strict:
+            return [self._withheld(r, "text") for r in out]
+        self._accessed([r["key"] for r in out])
+        return out
+
+    WITHHELD = ("[withheld: this paper's text may not go to a model. verify_claim checks a claim "
+                "against it with the user's local model]")
+
+    def _withheld(self, r: dict, field: str) -> dict:
+        k = self.lib.resolve(r["key"])
+        if k and self.lib.get(k).allowed(self.purpose):
+            return r
+        r = dict(r)
+        if field == "text":
+            r["text"], r["text_withheld"] = self.WITHHELD, True
+        elif r.get(field):
+            r[field] = dict(r[field], text=self.WITHHELD)
+        return r
+
+    def _profile(self, profile):
+        import contextlib
+
+        @contextlib.contextmanager
+        def use():
+            old, self.lib.model_profile = self.lib.model_profile, profile or self.lib.model_profile
+            try:
+                yield
+            finally:
+                self.lib.model_profile = old
+        return use()
+
+    def ask_local_model(self, question: str, keys: list[str] | None = None,
+                        profile: str | None = None) -> dict:
+        """Ask the user's local model a question that needs papers whose text may
+        not go to you. It reads the library and answers in its own words with
+        [@key] citations; long verbatim passages are cut before you see it."""
+        from . import asklocal
+        if self.purpose in (S.SERVE_META, S.SERVE_TEXT):
+            raise PermissionError("ask_local_model is for the library's owner")
+        with self._profile(profile):
+            rec = asklocal.ask(self.lib, question, keys=keys)
+        return {k: rec[k] for k in ("answer", "cited", "read", "model", "engine", "verbatim_removed")}
+
+    def verify_claim(self, key: str, claim: str, profile: str | None = None) -> dict:
+        with self._profile(profile):
+            return self._verify_claim(key, claim)
+
+    def _verify_claim(self, key: str, claim: str) -> dict:
+        """Check a claim against one paper with the user's local model. Returns
+        a verdict, the location (section, page) and confidence, not the
+        paper's text. With no local model running, the check is queued for
+        the user's next batch run."""
+        from . import localmodel
+        if self.purpose in (S.SERVE_META, S.SERVE_TEXT):
+            raise PermissionError("verify_claim is for the library's owner")
+        it = self._item_ok(key)
+        job = localmodel.verify_job(self.lib, it.key, claim)
+        try:
+            localmodel.endpoint(self.lib)
+            st = localmodel.run_now(self.lib, [job], log=lambda m: None)[0]
+        except ValueError:
+            st = {"status": "no local model"}
+        if st["status"] == "ok":
+            return localmodel.for_agent(self.lib, st["record"])
+        localmodel.enqueue(self.lib, [job])
+        return {"key": it.key, "claim": claim, "verdict": "queued",
+                "note": f"not checked now ({st.get('error') or st['status']}); queued for the "
+                        "user's next batch run (`litnav queue export`)."}
 
     def _project_keys(self, project):
         if not project:
@@ -219,4 +302,5 @@ class Tools:
 
 
 TOOL_NAMES = ("search_literature", "search_notes", "get_chunk", "list_sections", "get_section", "get_paper",
-              "related_papers", "list_papers", "reading_due", "get_note")
+              "related_papers", "list_papers", "reading_due", "get_note", "verify_claim",
+              "ask_local_model")

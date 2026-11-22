@@ -104,7 +104,8 @@ def _merge(base: dict, over: dict) -> dict:
 
 
 def find_root(explicit: str | os.PathLike | None = None, start: Path | None = None) -> Path:
-    """--library, then $LITNAV_LIBRARY, then walk up from the cwd."""
+    """--library, then $LITNAV_LIBRARY, then walk up from the cwd, then the
+    user's default (`litnav use`)."""
     for cand in (explicit, os.environ.get("LITNAV_LIBRARY")):
         if cand:
             p = Path(cand).expanduser().resolve()
@@ -115,9 +116,53 @@ def find_root(explicit: str | os.PathLike | None = None, start: Path | None = No
     for d in (p, *p.parents):
         if (d / CONFIG_NAME).is_file():
             return d
+    d = default_library()
+    if d is not None:
+        return d
     raise LibraryNotFound(
-        "no litnav library here: run `litnav init <dir>`, pass --library, "
-        "or set LITNAV_LIBRARY")
+        "no litnav library here: run `litnav init <dir>`, pass --library, set LITNAV_LIBRARY, "
+        "or `litnav use <dir>` to make one your default")
+
+
+def user_config_path() -> Path:
+    """Per-user settings (not per library): $XDG_CONFIG_HOME/litnav/config.toml,
+    ~/.config/litnav/config.toml, or %APPDATA%\\litnav\\config.toml on Windows."""
+    if os.name == "nt" and os.environ.get("APPDATA"):
+        return Path(os.environ["APPDATA"]) / "litnav" / "config.toml"
+    base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+    return Path(base) / "litnav" / "config.toml"
+
+
+def default_library() -> Path | None:
+    """The user's default library (`litnav use`), if it is still a library."""
+    f = user_config_path()
+    if not f.is_file():
+        return None
+    try:
+        with open(f, "rb") as fh:
+            lib = tomllib.load(fh).get("library")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    if not lib:
+        return None
+    p = Path(lib).expanduser().resolve()
+    return p if (p / CONFIG_NAME).is_file() else None
+
+
+def set_default_library(root: Path) -> Path:
+    import tomli_w
+    root = Path(root).expanduser().resolve()
+    if not (root / CONFIG_NAME).is_file():
+        raise LibraryNotFound(f"{root} is not a litnav library (no {CONFIG_NAME})")
+    f = user_config_path()
+    data = {}
+    if f.is_file():
+        with open(f, "rb") as fh:
+            data = tomllib.load(fh)
+    data["library"] = str(root)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(tomli_w.dumps(data), encoding="utf-8")
+    return f
 
 
 def load(root: Path) -> dict:

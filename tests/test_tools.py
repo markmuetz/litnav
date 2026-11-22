@@ -78,9 +78,15 @@ def test_licensed_to_models_false(ilib):
     assert lib.purpose(S.SEND_OUT) == S.SEND_OUT_STRICT
     t = Tools(lib, purpose=S.SEND_OUT, embedder=None)
     hits = t.search_literature("cold pools", mode="keyword", k=25)
-    assert {h["key"] for h in hits} == {"jones2019gravity"}
+    # the licensed paper is found, with its text withheld; the confidential draft is not
+    assert {h["key"] for h in hits} == {"jones2019gravity", "smith2021cold"}
+    assert all(h["text_withheld"] for h in hits if h["key"] == "smith2021cold")
+    assert not any(h.get("text_withheld") for h in hits if h["key"] == "jones2019gravity")
     paper = t.get_paper("smith2021cold")
-    assert paper["title"] and "abstract" not in paper and "summary" not in paper
+    # the abstract is the paper's words; a summary is model-written (send_derived) and may go
+    assert paper["title"] and "abstract" not in paper
+    if lib.get("smith2021cold").summary():
+        assert "summary" in paper
     sec = t.list_sections("smith2021cold")[0]["slug"]
     with pytest.raises(PermissionError):
         t.get_section("smith2021cold", sec)

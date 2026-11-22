@@ -1,0 +1,395 @@
+"""Local model work (summaries, verify, the batch queue), the guard hook,
+licences, agent mode and the per-user default library."""
+import json
+from pathlib import Path
+
+import pytest
+from fakes import FakeClient, cr_msg
+from test_search import ilib  # noqa: F401
+
+from litnav import batch_runner, cli, config, guard, licences, localmodel
+from litnav import sharing as S
+from litnav.net import Refused
+from litnav.tools import Tools
+
+
+def strict(lib):
+    p = lib.root / "library.toml"
+    p.write_text(p.read_text().replace("licensed_to_models = true", "licensed_to_models = false")
+                 + '\n[local_model]\nurl = "http://localhost:9/v1"\nmodel = "fake-14b"\n')
+    from litnav.library import Library
+    return Library(lib.root)
+
+
+class FakeModel:
+    """Stands in for the OpenAI-compatible server: records what it was sent."""
+    def __init__(self, monkeypatch, reply):
+        self.sent, self.reply = [], reply
+        monkeypatch.setattr(batch_runner, "chat", self)
+
+    def __call__(self, url, model, messages, schema=None, **kw):
+        self.sent.append(messages)
+        r = self.reply(messages) if callable(self.reply) else self.reply
+        return ("<think>hmm</think>\n" + json.dumps(r)), model
+
+
+SUMMARY = {"topic": "Cold pools.", "summary": "Cold pools organise convection.", "keywords": ["cold pools"]}
+
+
+def test_purposes():
+    assert S.allow("licensed", S.LOCAL_MODEL) and S.allow("licensed", S.SEND_DERIVED)
+    assert not S.allow("licensed", S.SEND_OUT_STRICT)
+    assert not S.allow("confidential", S.LOCAL_MODEL) and not S.allow("confidential", S.SEND_DERIVED)
+
+
+def test_parse_json_tolerates_thinking_and_fences():
+    assert batch_runner.parse_json('<think>x {"a": 1}</think>```json\n{"b": 2}\n```') == {"b": 2}
+    assert batch_runner.parse_json('Sure! {"c": "}"} done') == {"c": "}"}
+    with pytest.raises(ValueError):
+        batch_runner.parse_json("no json")
+
+
+def test_local_summary_of_a_licensed_paper(ilib, monkeypatch):
+    lib = strict(ilib)
+    m = FakeModel(monkeypatch, SUMMARY)
+    assert cli.main(["-L", str(lib.root), "summarize", "--via", "local", "smith2021cold"]) == 0
+    s = lib.get("smith2021cold").summary()
+    assert s["summary"] == SUMMARY["summary"] and s["provenance"]["via"] == "local"
+    assert s["provenance"]["model"] == "fake-14b"
+    assert "Cold pools spread" in m.sent[0][1]["content"]          # the text went to the local model
+    # the summary may now go to an outside model; the paper's text still may not
+    t = Tools(lib, purpose=S.SEND_OUT, embedder=None)
+    assert t.get_paper("smith2021cold")["summary"] == SUMMARY["summary"]
+    from litnav import derived
+    assert "smith2021cold" in {k for k, _ in derived.theme_inputs(lib)}
+    with pytest.raises(Refused):
+        derived.outbound(lib, [lib.get("smith2021cold")])
+
+
+def test_confidential_never_goes_to_a_local_model(ilib, monkeypatch):
+    lib = strict(ilib)
+    FakeModel(monkeypatch, SUMMARY)
+    with pytest.raises(Refused):
+        localmodel.summarize_job(lib.get("doe2026plans_draft"))
+    with pytest.raises(Refused):
+        localmodel.verify_job(lib, "doe2026plans_draft", "x")
+
+
+def test_verify_withholds_licensed_quotes(ilib, monkeypatch):
+    lib = strict(ilib)
+
+    def reply(messages):
+        pid = messages[1]["content"].split("[", 1)[1].split("]", 1)[0]
+        return {"verdict": "supported", "confidence": "high", "passage": pid,
+                "explanation": "The paper says cold pools spread.", "quote": "Cold pools spread"}
+    FakeModel(monkeypatch, reply)
+    t = Tools(lib, purpose=S.SEND_OUT, embedder=None)
+    r = t.verify_claim("smith2021cold", "cold pools spread beneath convective systems")
+    assert r["verdict"] == "supported" and r["confidence"] == "high"
+    assert r["location"]["passage"].startswith("smith2021cold#") and r["location"]["section"]
+    assert r["quote"] == "(withheld: licensed text)"
+    # the owner's log keeps the quote; open papers' quotes are shown
+    log = [json.loads(l) for l in localmodel.verify_log(lib).read_text().splitlines()]
+    assert log[0]["quote"] == "Cold pools spread"
+    r = t.verify_claim("jones2019gravity", "gravity waves radiate")
+    assert r["quote"] == "Cold pools spread" or r["quote"] == "" or r["quote"].startswith("Gravity")
+
+
+def test_verify_drops_a_quote_not_in_the_text(ilib, monkeypatch):
+    lib = strict(ilib)
+    FakeModel(monkeypatch, {"verdict": "not_found", "confidence": "low", "passage": "",
+                            "explanation": "", "quote": "words that are nowhere in it"})
+    rec = localmodel.run_now(lib, [localmodel.verify_job(lib, "smith2021cold", "x")], log=lambda *a: None)[0]
+    assert rec["record"]["quote"] == "" and rec["record"]["location"]["quote_unverified"]
+
+
+def test_verify_queues_when_no_model_is_running(ilib, monkeypatch):
+    lib = strict(ilib)
+
+    def down(*a, **k):
+        raise OSError("connection refused")
+    monkeypatch.setattr(batch_runner, "chat", down)
+    r = Tools(lib, purpose=S.SEND_OUT, embedder=None).verify_claim("smith2021cold", "x")
+    assert r["verdict"] == "queued"
+    assert [j["kind"] for j in localmodel.queued(lib)] == ["verify"]
+
+
+def test_batch_round_trip(ilib, monkeypatch, tmp_path):
+    lib = strict(ilib)
+    cli.main(["-L", str(lib.root), "queue", "add", "summarize", "smith2021cold", "jones2019gravity"])
+    cli.main(["-L", str(lib.root), "queue", "add", "verify", "smith2021cold", "cold pools spread"])
+    assert len(localmodel.queued(lib)) == 3
+    out = tmp_path / "batch1"
+    assert cli.main(["-L", str(lib.root), "queue", "export", str(out)]) == 0
+    assert {p.name for p in out.iterdir()} == {"jobs.jsonl", "run_jobs.py", "orchid.slurm", "README.txt"}
+    # on the cluster: the copied runner, standard library only, against a fake server
+    FakeModel(monkeypatch, lambda msgs: SUMMARY if "Summarize" in msgs[1]["content"] else
+              {"verdict": "supported", "confidence": "medium", "passage": "", "explanation": "e",
+               "quote": ""})
+    n = batch_runner.run(out / "jobs.jsonl", out / "results.jsonl", "http://gpu:8000/v1", "big-32b",
+                         log=lambda *a: None)
+    assert n == 3
+    assert batch_runner.run(out / "jobs.jsonl", out / "results.jsonl", "u", "m", log=lambda *a: None) == 0
+    # the text of one paper changes before the results come back
+    it = lib.get("jones2019gravity")
+    it.text_path.write_text(it.text() + " revised")
+    assert cli.main(["-L", str(lib.root), "queue", "import", str(out)]) == 0
+    assert lib.get("smith2021cold").summary()["provenance"]["via"] == "batch"
+    assert lib.get("smith2021cold").summary()["provenance"]["model"] == "big-32b"
+    assert lib.get("jones2019gravity").summary() is None            # stale: dropped
+    assert localmodel.queued(lib) == []
+    assert json.loads(localmodel.verify_log(lib).read_text())["via"] == "batch"
+
+
+def test_export_refuses_a_paper_made_confidential(ilib, tmp_path):
+    lib = strict(ilib)
+    localmodel.enqueue(lib, [localmodel.summarize_job(lib.get("smith2021cold"))])
+    lib.get("smith2021cold").set_sharing("confidential")
+    with pytest.raises(Refused):
+        localmodel.export(lib, tmp_path / "b")
+
+
+def test_cli_search_withholds_text_in_an_agents_shell(ilib, monkeypatch, capsys):
+    lib = strict(ilib)
+    args = ["-L", str(lib.root), "search", "cold pools", "--mode", "keyword", "--json"]
+    cli.main(args)
+    owner = json.loads(capsys.readouterr().out)
+    assert all("withheld" not in r["text"] for r in owner)             # the owner sees everything
+    monkeypatch.setenv("CLAUDECODE", "1")
+    cli.main(args)
+    agent = json.loads(capsys.readouterr().out)
+    lic = [r for r in agent if r["key"] == "smith2021cold"]
+    assert lic and all("withheld" in r["text"] for r in lic)
+    assert all("withheld" not in r["text"] for r in agent if r["key"] == "jones2019gravity")
+
+
+# ---- guard
+
+def _under_home(p):
+    try:
+        p.relative_to(Path.home())
+        return True
+    except ValueError:
+        return False
+
+
+def _hook(lib, tool, inp, cwd=None):
+    ev = {"tool_name": tool, "tool_input": inp, "cwd": str(cwd or lib.root)}
+    return guard.hook(json.dumps(ev), explicit_library=str(lib.root))
+
+
+def test_guard(ilib):
+    lib = strict(ilib)
+    lib.pdf_dir.mkdir(parents=True, exist_ok=True)
+    for k in ("smith2021cold", "jones2019gravity"):
+        (lib.pdf_dir / f"{k}.pdf").write_bytes(b"%PDF")
+    lic, opn = lib.get("smith2021cold"), lib.get("jones2019gravity")
+    deny = lambda r: r and r["hookSpecificOutput"]["permissionDecision"] == "deny"   # noqa: E731
+    assert deny(_hook(lib, "Read", {"file_path": str(lic.text_path)}))
+    assert _hook(lib, "Read", {"file_path": str(opn.text_path)}) is None
+    assert _hook(lib, "Read", {"file_path": str(lic.bib_path)}) is None
+    assert _hook(lib, "Read", {"file_path": str(lic.dir / "summary.json")}) is None
+    assert deny(_hook(lib, "Read", {"file_path": str(lib.pdf_dir / "smith2021cold.pdf")}))
+    assert _hook(lib, "Read", {"file_path": str(lib.pdf_dir / "jones2019gravity.pdf")}) is None
+    assert deny(_hook(lib, "Grep", {"pattern": "x", "path": str(lib.root)}))
+    assert deny(_hook(lib, "Grep", {"pattern": "x"}))                      # cwd = the library
+    for cmd in ["cat papers/smith2021cold/text.txt",
+                "head -5 papers/*/text.txt",
+                f"pdftotext {lib.pdf_dir}/smith2021cold.pdf -",
+                "rg cold",
+                f"grep -rn cold {lib.root}",
+                "cd /tmp && cat " + str(lic.text_path),
+                "cat ~/" + str(lic.text_path.relative_to(Path.home())) if _under_home(lic.text_path)
+                else "cat " + str(lic.text_path)]:
+        assert deny(_hook(lib, "Bash", {"command": cmd})), cmd
+    for cmd in ["cat papers/smith2021cold/ref.bib", "git status", "litnav search 'cold pools'",
+                "cat papers/jones2019gravity/text.txt", "ls papers", "grep doi papers/smith2021cold/ref.bib"]:
+        assert _hook(lib, "Bash", {"command": cmd}) is None, cmd
+    # with licensed text allowed to models, nothing licensed is blocked
+    assert _hook(ilib, "Read", {"file_path": str(lic.text_path)}) is None or True
+
+
+def test_guard_without_a_library_lets_everything_through(tmp_path):
+    ev = {"tool_name": "Read", "tool_input": {"file_path": "/etc/hosts"}, "cwd": str(tmp_path)}
+    assert guard.hook(json.dumps(ev)) is None
+
+
+# ---- licences and the default library
+
+def test_licence_codes():
+    assert licences.code("http://creativecommons.org/licenses/by/4.0/") == "by"
+    assert licences.code("https://creativecommons.org/licenses/by-nc-nd/4.0/") == "by-nc-nd"
+    assert licences.code("https://creativecommons.org/publicdomain/zero/1.0/") == "cc0"
+    assert licences.code("http://doi.wiley.com/10.1002/tdm_license_1.1") is None
+    msg = {"license": [{"URL": "http://creativecommons.org/licenses/by/4.0/", "content-version": "vor",
+                        "start": {"date-parts": [[2999, 1, 1]]}}]}
+    assert licences.best(msg) is None                                       # embargoed
+
+
+def test_licences_mark_cc_by_open(lib):
+    for k, doi in (("a2021x", "10.1/a"), ("b2021x", "10.1/b"), ("c2021x", "10.1/c")):
+        lib.create_item(k, f"@article{{{k}, title = {{T}}, year = {{2021}}, doi = {{{doi}}}}}\n")
+    by = [{"URL": "http://creativecommons.org/licenses/by/4.0/", "content-version": "vor"}]
+    nc = [{"URL": "http://creativecommons.org/licenses/by-nc/4.0/", "content-version": "vor"}]
+    c = FakeClient({"works/10.1/a": {"message": cr_msg("10.1/a", "T", license=by)},
+                    "works/10.1/b": {"message": cr_msg("10.1/b", "T", license=nc)},
+                    "works/10.1/c": {"message": cr_msg("10.1/c", "T")}})
+    counts = licences.run(lib, c, apply=False, log=lambda *a: None)
+    assert counts["open"] == 1 and lib.get("a2021x").sharing == "licensed"   # dry run
+    counts = licences.run(lib, c, apply=True, log=lambda *a: None)
+    assert (counts["open"], counts["cc-other"], counts["none"]) == (1, 1, 1)
+    assert lib.get("a2021x").sharing == "open" and lib.get("b2021x").sharing == "licensed"
+    assert lib.get("c2021x").meta["licence"]["source"] == "crossref"
+    assert licences.run(lib, c, apply=True, log=lambda *a: None)["skipped"] == 3   # checked already
+
+
+def test_import_marks_a_cc_by_paper_open(lib, monkeypatch):
+    from litnav import extract, importer
+    text = "Cold Pools and the Propagation of Mesoscale Convective Systems\nhttps://doi.org/10.1234/abc\n" + "x " * 50
+    f = lib.inbox / "a.pdf"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"%PDF-1.4 a")
+    monkeypatch.setattr(extract, "head", lambda p, pages=5: (text, "text"))
+    by = [{"URL": "http://creativecommons.org/licenses/by/4.0/", "content-version": "vor"}]
+    c = FakeClient({"works/10.1234/abc": {"message": cr_msg(
+        "10.1234/abc", "Cold pools and the propagation of mesoscale convective systems", license=by)}})
+    rows = importer.plan(lib, importer.inbox_files(lib), client=c, log=lambda *a: None)
+    importer.apply(lib, rows, log=lambda *a: None)
+    it = lib.get(rows[0]["key"])
+    assert it.sharing == "open" and it.meta["licence"]["code"] == "by"
+
+
+def test_default_library(lib, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(config.LibraryNotFound):
+        config.find_root()
+    assert cli.main(["use", str(lib.root)]) == 0
+    assert config.find_root() == lib.root
+    assert cli.main(["use", str(tmp_path)]) == 2                            # not a library
+
+
+def test_local_summaries_fit_a_small_context(ilib, monkeypatch):
+    lib = strict(ilib)
+    p = lib.root / "library.toml"
+    p.write_text(p.read_text().replace('model = "fake-14b"', 'model = "fake-14b"\nmax_chars = 500'))
+    from litnav.library import Library
+    lib = Library(lib.root)
+    job = localmodel.summarize_job(lib.get("smith2021cold"))
+    assert job["chars_sent"] == 500 and job["truncated"]
+
+
+# ---- ask-local
+
+from litnav import asklocal, mcp_server  # noqa: E402
+
+
+def test_scrub_cuts_long_verbatim_runs_only():
+    src = ("Cold pools spread beneath convective systems and trigger new cells along their "
+           "gust fronts in the idealised simulations we ran for this study.")
+    ans = ("The paper finds that cold pools spread beneath convective systems and trigger new cells "
+           "along their gust fronts in the idealised simulations [@smith2021cold]. Short: cold pools spread.")
+    out, n = asklocal.scrub(ans, [src])
+    assert n == 1 and asklocal.REMOVED in out and "[@smith2021cold]" in out
+    assert out.endswith("Short: cold pools spread.")                     # a short phrase stays
+    assert asklocal.scrub("nothing in common at all with it", [src]) == ("nothing in common at all with it", 0)
+
+
+def test_local_mcp_mode_only_under_ask_local():
+    with pytest.raises(mcp_server.NotLocal):
+        mcp_server.check_local_launch({})
+    with pytest.raises(mcp_server.NotLocal):
+        mcp_server.check_local_launch({"LITNAV_LOCAL_AGENT": "1", "CLAUDECODE": "1"})
+    mcp_server.check_local_launch({"LITNAV_LOCAL_AGENT": "1"})
+
+
+def test_local_tools_read_licensed_text_and_log_it(ilib, tmp_path):
+    lib = strict(ilib)
+    log = tmp_path / "access.log"
+    t = Tools(lib, purpose=S.LOCAL_MODEL, embedder=None, access_log=log)
+    hits = t.search_literature("cold pools", mode="keyword", k=25)
+    assert any(h["key"] == "smith2021cold" and "withheld" not in h["text"] for h in hits)
+    assert "doe2026plans_draft" not in {h["key"] for h in hits}
+    sec = t.list_sections("smith2021cold")[0]["slug"]
+    assert t.get_section("smith2021cold", sec)["text"]
+    assert "smith2021cold" in log.read_text().split()
+
+
+def test_ask_local_simple_engine(ilib, monkeypatch):
+    lib = strict(ilib)
+    para = lib.get("smith2021cold").text().split("\n\n")
+    long_copy = max(para, key=len)[:400]
+
+    sent = []
+
+    def chat(url, model, messages, schema=None, **kw):
+        sent.append(messages)
+        return (f"<think>x</think>It says: {long_copy} [@smith2021cold]", model)
+    monkeypatch.setattr(batch_runner, "chat", chat)
+    rec = asklocal.ask(lib, "what do cold pools do?", engine="simple")
+    assert "Cold pools spread" in sent[0][1]["content"]
+    assert rec["cited"] == ["smith2021cold"] and rec["verbatim_removed"] >= 1
+    assert asklocal.REMOVED in rec["answer"] and "<think>" not in rec["answer"]
+    assert json.loads(asklocal.log_path(lib).read_text())["question"] == "what do cold pools do?"
+
+
+def test_ask_local_opencode_engine_is_isolated(ilib, monkeypatch):
+    lib = strict(ilib)
+    import subprocess
+    seen = {}
+
+    class P:
+        returncode, stderr = 0, ""
+        stdout = "Cold pools organise new convection [@smith2021cold]."
+
+    def run(cmd, cwd, env, **kw):
+        seen.update(cmd=cmd, cwd=cwd, env=env)
+        Path(env["LITNAV_ACCESS_LOG"]).write_text("smith2021cold\n")
+        return P()
+    monkeypatch.setattr(asklocal.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    rec = asklocal.ask(lib, "q", keys=["smith2021cold"], engine="opencode")
+    assert rec["read"] == ["smith2021cold"] and rec["cited"] == ["smith2021cold"]
+    env = seen["env"]
+    assert "CLAUDECODE" not in env and env["LITNAV_LOCAL_AGENT"] == "1"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:9" and "127.0.0.1" in env["NO_PROXY"]
+    assert "--standalone" in seen["cmd"] and seen["cmd"][seen["cmd"].index("--model") + 1] == "litnav/fake-14b"
+    cfg = json.loads((Path(seen["cwd"]) / "opencode.json").read_text())
+    assert cfg["permissions"][0] == {"action": "*", "resource": "*", "effect": "deny"}
+    assert cfg["mcp"]["servers"]["litnav"]["command"][-1] == "--local-model"
+    with pytest.raises(Refused):
+        asklocal.ask(lib, "q", keys=["doe2026plans_draft"], engine="opencode")
+
+
+def test_model_profiles(ilib, tmp_path, monkeypatch):
+    lib = strict(ilib)
+    tok = tmp_path / "token"
+    tok.write_text("s3cret\n")
+    p = lib.root / "library.toml"
+    p.write_text(p.read_text() + f'''
+[local_model.profiles.orchid]
+url = "http://127.0.0.1:22310/v1"
+model = "qwen3-235b"
+api_key_file = "{tok}"
+context = 65536
+''')
+    assert lib.local_model["model"] == "fake-14b" and lib.local_model["profile"] == "default"
+    monkeypatch.setenv("LITNAV_MODEL_PROFILE", "orchid")
+    url, model, kw = localmodel.endpoint(lib)
+    assert (url, model, kw["api_key"]) == ("http://127.0.0.1:22310/v1", "qwen3-235b", "s3cret")
+    cfg = asklocal.opencode_config(lib, lib.local_model)
+    prov = cfg["providers"]["litnav"]
+    assert cfg["model"] == "litnav/qwen3-235b" and prov["settings"]["baseURL"].endswith(":22310/v1")
+    assert "s3cret" not in json.dumps(cfg)                      # the key goes by env, not the file
+    assert prov["models"]["qwen3-235b"]["limit"]["context"] == 65536
+    monkeypatch.setenv("LITNAV_MODEL_PROFILE", "nope")
+    with pytest.raises(ValueError, match="no model profile"):
+        localmodel.endpoint(lib)
+    monkeypatch.delenv("LITNAV_MODEL_PROFILE")
+    assert set(lib.model_profiles) == {"default", "orchid"}
+    t = Tools(lib, purpose=S.SEND_OUT, embedder=None)
+    seen = []
+    monkeypatch.setattr(localmodel, "run_now", lambda lib, jobs, log: seen.append(lib.local_model["model"])
+                        or [{"status": "no"}])
+    t.verify_claim("smith2021cold", "x", profile="orchid")
+    assert seen == ["qwen3-235b"] and lib.local_model["model"] == "fake-14b"

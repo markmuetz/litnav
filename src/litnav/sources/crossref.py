@@ -33,7 +33,7 @@ def query(client, text: str, rows: int = 3) -> list[dict]:
         d = client.get_json(API, purpose=LOOKUP, params={
             "query.bibliographic": text[:250], "rows": rows,
             "select": "DOI,author,title,issued,published-print,published-online,"
-                      "container-title,type,volume,issue,page,publisher,subtype"})
+                      "container-title,type,volume,issue,page,publisher,subtype,license"})
     except NetError:
         return []
     return d.get("message", {}).get("items", [])

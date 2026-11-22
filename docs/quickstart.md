@@ -47,6 +47,14 @@ against the text), fetches its metadata from Crossref, names it
 `<author><year><word>` (e.g. `smith2021cold`), and files the PDF as
 `pdfs/<key>.pdf`. Anything it is not sure of stays in the inbox for you.
 
+A paper with no DOI yet (an accepted manuscript, a report) gets no match.
+Give its metadata yourself; nothing is looked up:
+
+```sh
+litnav import paper.pdf --title "Its title" --author "Example, Ann B." \
+    --author "Sample, Carl" --year 2026 --journal "J. Adv. Model. Earth Syst." --apply
+```
+
 Drafts you co-author, or anything else that must never leave your computer:
 put them in `pdfs/_inbox/_confidential/`. They are never read, looked up or
 sent anywhere.

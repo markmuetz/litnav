@@ -51,6 +51,12 @@ Code never checks a level directly; it states a **purpose** and asks
   running web app or MCP server without a restart.
 - `serve_meta` / `serve_text`: serving to someone other than you (reserved for
   a future shared server; nothing uses them yet).
+- `local_model`: an item's text sent to a model you run (Ollama on this
+  machine, or a batch on your own HPC account): summaries and `verify`.
+  Allowed for `open`, `licensed` and `private`; never `confidential`.
+- `send_derived`: model-written text about an item (its summary, a
+  verdict) sent to an outside model. Allowed wherever `local_model` is: your
+  ruling that a summary may go where the paper's text may not.
 
 # The gates
 
@@ -68,6 +74,9 @@ Code never checks a level directly; it states a **purpose** and asks
 | `draft version` | CLI | moves files and logs the version; never opens, extracts or looks up the PDF |
 | `Tools(purpose=send_out)` | MCP server, Ask | text of disallowed items; metadata still allowed when only the strict rule applies (`meta_purpose`) |
 | confidential import path | `importer` | `_inbox/_confidential/` files are never text-extracted or looked up |
+| `localmodel.gate()` | `summarize --via local/queue`, `verify`, `queue export` | text to your model for confidential items; re-checked at export |
+| `sharing.agent_mode()` + `Library.cli_purpose()` | `litnav search` in an agent's shell | prints licensed passages as withheld, as the MCP tools do |
+| `litnav guard` | Claude Code PreToolUse hook | an agent's Read/Grep/Bash of licensed text and PDFs (a guard against accidents, not a sandbox) |
 | `extract` | `extract.py` | never extracts text for confidential items |
 
 # What leaves the machine, by destination

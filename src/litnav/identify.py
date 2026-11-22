@@ -40,6 +40,7 @@ class Proposal:
     arxiv: str = ""
     bibtex: str = ""
     year: int | None = None
+    licence: str = ""            # URL of an in-force Creative Commons licence (Crossref)
     extra: dict = field(default_factory=dict)
 
 
@@ -140,6 +141,9 @@ def identify(pdf: Path, client, exists, *, cfg: dict, doi: str | None = None,
         p.extra["author"] = f"{crossref.first_family(msg)}, x"
         p.key = crossref.key_for(msg, exists, marker=marker, extra_stop=extra_stop) or ""
         p.bibtex = crossref.to_bibtex(msg, p.key) if p.key else ""
+        from .licences import best
+        lic = best(msg)
+        p.licence = lic[1] if lic else ""
     if not p.key:
         p.status = "no-key"
         return p

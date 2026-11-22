@@ -158,7 +158,9 @@ class Item:
              "has_text": self.has_text,
              "relations": self.meta.get("relations", {})}
         s = self.summary()
-        if s and self.allowed(purpose):
+        # a summary is model-written: where the text may not go, it still may
+        sp = S.SEND_DERIVED if purpose in (S.SEND_OUT, S.SEND_OUT_STRICT) else purpose
+        if s and (self.allowed(purpose) or self.allowed(sp)):
             d["summary"] = s.get("summary", "")
             d["topic"] = s.get("topic", "")
         return d
@@ -183,6 +185,43 @@ class Library:
         """Map a purpose through this library's policy (see sharing.effective)."""
         self.reload_config()
         return S.effective(purpose, self.licensed_to_models)
+
+    def cli_purpose(self) -> str:
+        """What CLI output that shows paper text is for: the owner (local), or,
+        inside an agent's shell, a model (send_out, through the library's policy)."""
+        return self.purpose(S.SEND_OUT) if S.agent_mode() else S.LOCAL
+
+    # which [local_model.profiles.NAME] to use; None: $LITNAV_MODEL_PROFILE,
+    # then [local_model] profile, then [local_model] itself
+    model_profile: str | None = None
+
+    @property
+    def local_model(self) -> dict:
+        """[local_model] in library.toml or .litnav/local.toml: url (an
+        OpenAI-compatible /v1 endpoint), model, timeout, max_chars, context,
+        api_key_env / api_key_file; with the chosen profile laid over it."""
+        import os
+        self.reload_config()
+        base = dict(self.config.get("local_model", {}))
+        profiles = base.pop("profiles", {}) or {}
+        name = self.model_profile or os.environ.get("LITNAV_MODEL_PROFILE") or base.get("profile")
+        base["profile"] = "default"
+        if name and name != "default":
+            if name not in profiles:
+                raise ValueError(f"no model profile {name!r}: add [local_model.profiles.{name}] "
+                                 "(url, model, ...) to .litnav/local.toml; have: "
+                                 + (", ".join(["default", *profiles]) if profiles else "default"))
+            base = {**base, **profiles[name], "profile": name}
+        return base
+
+    @property
+    def model_profiles(self) -> dict:
+        """Every endpoint: {"default": [local_model], name: merged profile}."""
+        base = dict(self.config.get("local_model", {}))
+        profiles = base.pop("profiles", {}) or {}
+        base.pop("profile", None)
+        return {"default": {**base, "profile": "default"},
+                **{n: {**base, **v, "profile": n} for n, v in profiles.items()}}
 
     @classmethod
     def find(cls, explicit=None) -> "Library":

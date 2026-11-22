@@ -1,0 +1,11 @@
+{
+  "description": "litnav guard: refuse direct reads of paper text and PDFs that may not go to a model",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Bash",
+        "hooks": [{"type": "command", "command": "litnav guard", "timeout": 10}]
+      }
+    ]
+  }
+}
