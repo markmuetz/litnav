@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import random
+import re
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -191,8 +192,14 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
                      "explanation": out.get("explanation", ""), "mismatch": out.get("mismatch", ""),
                      "answered_question": c.get("question"), "doubt": c.get("doubt"),
                      "error": r.get("error"), "has_quote": bool(out.get("quote")),
-                     "passage_valid": out.get("passage") in r["passages"]})
+                     "passage_valid": _ids_valid(out.get("passage", ""), r["passages"])})
     return {"rows": rows, "summary": summarize(rows)}
+
+
+def _ids_valid(passage: str, ids: list[str]) -> bool:
+    """The reply names passages by id (one or several, comma-separated), not by text."""
+    got = [p.strip() for p in re.split(r"[,;\s]+", passage or "") if p.strip()]
+    return bool(got) and all(g in ids for g in got)
 
 
 def summarize(rows):
@@ -211,6 +218,7 @@ def summarize(rows):
                                   for v in ("A", "B")}
     s["confidence_when_right"] = {v: Counter(r["confidence"] for r in rows if r["variant"] == v and r["ok"])
                                   for v in ("A", "B")}
+    s["passage_ids_valid"] = {v: sum(r["passage_valid"] for r in rows if r["variant"] == v) for v in ("A", "B", "R")}
     s["hedge_flags_B"] = Counter(f"{r['type']}:{r['hedging']}" for r in rows if r["variant"] == "B")
     return s
 
