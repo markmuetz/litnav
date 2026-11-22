@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -32,7 +33,7 @@ from . import sharing as S
 from .net import Refused
 from .util import atomic_write, sha256_file
 
-VERIFY_PROMPT_VERSION = 1
+VERIFY_PROMPT_VERSION = 2     # 2: passages are ids from an enum, not free text
 MAX_VERIFY_CHARS = 14000
 QUOTE_MAX_WORDS = 25
 
@@ -42,16 +43,36 @@ VERIFY_SCHEMA = {
         "verdict": {"type": "string", "enum": ["supported", "partly_supported", "contradicted",
                                                "not_found"]},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-        "passage": {"type": "string", "description": "id of the passage the verdict rests on, or ''"},
+        "passages": {"type": "array", "maxItems": 3, "items": {"type": "string"},
+                     "description": "ids of the passages the verdict rests on (none if not_found)"},
         "explanation": {"type": "string",
                         "description": "One or two sentences in your own words: what the paper says "
                                        "about the claim. Do not copy long stretches of the text."},
         "quote": {"type": "string", "description": f"At most {QUOTE_MAX_WORDS} words copied exactly "
                                                    "from the passage that decides it, or ''"},
     },
-    "required": ["verdict", "confidence", "passage", "explanation", "quote"],
+    "required": ["verdict", "confidence", "passages", "explanation", "quote"],
     "additionalProperties": False,
 }
+
+def with_passage_ids(schema: dict, ids: list[str]) -> dict:
+    """The schema with `passages` limited to these ids. The server constrains
+    the reply to the schema, so the field can't carry paper text (or a
+    misspelt id): the explanation is the only free text left."""
+    s = json.loads(json.dumps(schema))
+    s["properties"]["passages"]["items"]["enum"] = list(ids)
+    return s
+
+
+def cited_passages(out: dict, ids: list[str]) -> list[str]:
+    """The valid passage ids a reply names (`passages`, or the old `passage` string)."""
+    got = out.get("passages")
+    if got is None:
+        got = re.split(r"[,;\s]+", out.get("passage") or "")
+    if isinstance(got, str):
+        got = [got]
+    return [g for g in dict.fromkeys(x.strip() for x in got if isinstance(x, str)) if g in ids]
+
 
 VERIFY_SYSTEM = (
     "You check claims against one academic paper for a researcher. You see the claim and "
@@ -59,7 +80,8 @@ VERIFY_SYSTEM = (
     "Decide only from the passages. 'supported': the passages state it. 'partly_supported': "
     "some of it is stated, some is not or differs. 'contradicted': the passages say otherwise. "
     "'not_found': the passages do not settle it. Bibliographic claims (volume, pages, article "
-    "number, DOI, year, authors) are decided from the header or citation line. Reply with JSON only.")
+    "number, DOI, year, authors) are decided from the header or citation line. In `passages` "
+    "give the ids of the passages the verdict rests on. Reply with JSON only.")
 
 
 def _id(*parts) -> str:
@@ -190,7 +212,7 @@ def verify_job(lib, key: str, claim: str) -> dict:
     sha = sha256_file(it.text_path)
     return {"id": f"verify-{it.key}-{_id(claim, sha)}", "kind": "verify", "key": it.key,
             "claim": claim, "text_sha256": sha, "passages": [p["id"] for p in ps],
-            "schema": VERIFY_SCHEMA,
+            "schema": with_passage_ids(VERIFY_SCHEMA, [p["id"] for p in ps]),
             "messages": [{"role": "system", "content": VERIFY_SYSTEM},
                          {"role": "user", "content": f"Claim: {claim}\n\nPaper: {it.title} "
                           f"({it.year})\n\nPassages:\n{body}\n\nReply with JSON only."}]}
@@ -238,8 +260,9 @@ def apply_result(lib, job: dict, res: dict, *, via: str) -> dict:
 
 
 def verdict_record(lib, it, job, out, *, model, via) -> dict:
-    pid = out.get("passage") if out.get("passage") in job["passages"] else ""
-    loc = {}
+    cited = cited_passages(out, job["passages"])
+    pid = cited[0] if cited else ""
+    loc = {"passages": cited} if cited else {}
     if pid:
         from . import index
         con = index.connect(lib, readonly=True)
@@ -248,7 +271,7 @@ def verdict_record(lib, it, job, out, *, model, via) -> dict:
         finally:
             con.close()
         if r:
-            loc = {"passage": pid, "section": r["section_title"] or r["kind"],
+            loc |= {"passage": pid, "section": r["section_title"] or r["kind"],
                    "page": _page(it.text(), r["start"])}
     quote = " ".join((out.get("quote") or "").split())
     if quote and quote.lower()[:60] not in " ".join(it.text().split()).lower():

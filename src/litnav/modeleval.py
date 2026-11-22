@@ -42,12 +42,12 @@ SCHEMA_B = {
         "verdict": {"type": "string", "enum": ["supported", "partly_supported", "contradicted",
                                                "not_found"]},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-        "passage": {"type": "string"},
+        "passages": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
         "mismatch": {"type": "string", "description": "What differs between the claim and the "
                      "paper, in your own words, or ''"},
         "explanation": {"type": "string"},
     },
-    "required": ["parts", "hedging", "verdict", "confidence", "passage", "mismatch", "explanation"],
+    "required": ["parts", "hedging", "verdict", "confidence", "passages", "mismatch", "explanation"],
     "additionalProperties": False,
 }
 
@@ -72,7 +72,8 @@ SYSTEM_B = (
     "addressed, or the claim is overstated. 'not_found' if the passages do not address the "
     "main statement. Bibliographic claims (journal, volume, pages, article number, year) are "
     "decided from the header or citation line.\n"
-    "Write the explanation and mismatch in your own words; do not copy sentences. "
+    "In `passages` give the ids of the passages your verdict rests on. Write the explanation "
+    "and mismatch in your own words; do not copy sentences. "
     "Reply with JSON only.")
 
 
@@ -91,19 +92,20 @@ def build_jobs(lib, cases: list[dict], variants=("A", "B")) -> list[dict]:
         base = cache[c["claim"]]
         user_a = base["messages"][1]["content"]
         body = user_a.split("\n\nPassages:\n", 1)[1].rsplit("\n\nReply with JSON only.", 1)[0]
+        schema_b = localmodel.with_passage_ids(SCHEMA_B, base["passages"])
         head = f"Claim: {c['claim']}\n\nPaper: {it.title} ({it.year})\n\n"
         if c.get("question"):
             user = (head + f"Question about this claim: {c['question']}\nAnswer the question in "
                     "the explanation, then give your verdict on the claim.\n\nPassages:\n" + body
                     + "\n\nReply with JSON only.")
-            jobs.append(_job(c, "R", base, SYSTEM_B, user, SCHEMA_B))
+            jobs.append(_job(c, "R", base, SYSTEM_B, user, schema_b))
             continue
         for v in variants:
             if v == "A":
                 jobs.append(_job(c, "A", base, base["messages"][0]["content"], user_a, base["schema"]))
             else:
                 jobs.append(_job(c, "B", base, SYSTEM_B, head + "Passages:\n" + body
-                                 + "\n\nReply with JSON only.", SCHEMA_B))
+                                 + "\n\nReply with JSON only.", schema_b))
     return jobs
 
 
@@ -192,14 +194,17 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
                      "explanation": out.get("explanation", ""), "mismatch": out.get("mismatch", ""),
                      "answered_question": c.get("question"), "doubt": c.get("doubt"),
                      "error": r.get("error"), "has_quote": bool(out.get("quote")),
-                     "passage_valid": _ids_valid(out.get("passage", ""), r["passages"])})
+                     "passage_valid": _ids_valid(out, r["passages"])})
     return {"rows": rows, "summary": summarize(rows)}
 
 
-def _ids_valid(passage: str, ids: list[str]) -> bool:
-    """The reply names passages by id (one or several, comma-separated), not by text."""
-    got = [p.strip() for p in re.split(r"[,;\s]+", passage or "") if p.strip()]
-    return bool(got) and all(g in ids for g in got)
+def _ids_valid(out: dict, ids: list[str]) -> bool:
+    """The reply names passages only by valid ids (`passages`, or the old
+    comma-separated `passage` string)."""
+    got = out.get("passages")
+    if got is None:
+        got = [p.strip() for p in re.split(r"[,;\s]+", out.get("passage") or "") if p.strip()]
+    return bool(got) and all(isinstance(g, str) and g in ids for g in got)
 
 
 def summarize(rows):

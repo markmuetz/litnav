@@ -437,3 +437,22 @@ def test_eval_model_runs_and_scores(ilib, tmp_path, monkeypatch):
     s = modeleval.report(lib, ev, rd)["summary"]
     assert s["by_variant"]["A"] == {"n": 2, "ok": 1, "exact": 1}
     assert s["by_variant"]["R"]["ok"] == 1 and s["confusion"]["B"]["contradicted->not_found"] == 1
+
+
+def test_verify_schema_limits_passages_to_the_ids_sent(ilib, monkeypatch):
+    lib = strict(ilib)
+    job = localmodel.verify_job(lib, "smith2021cold", "cold pools spread")
+    items = job["schema"]["properties"]["passages"]["items"]
+    assert items["enum"] == job["passages"] and job["passages"]
+    assert "enum" not in localmodel.VERIFY_SCHEMA["properties"]["passages"]["items"]   # not mutated
+    ids = job["passages"]
+    out = {"passages": [ids[0], "smith2021cold paper text", ids[0]]}
+    assert localmodel.cited_passages(out, ids) == [ids[0]]
+    assert localmodel.cited_passages({"passage": f"{ids[0]}, nope"}, ids) == [ids[0]]    # old replies
+
+    def reply(messages):
+        return {"verdict": "supported", "confidence": "high", "passages": ids[:2],
+                "explanation": "e", "quote": ""}
+    FakeModel(monkeypatch, reply)
+    r = Tools(lib, purpose=S.SEND_OUT, embedder=None).verify_claim("smith2021cold", "cold pools spread")
+    assert r["location"]["passage"] == ids[0] and r["location"]["passages"] == ids[:2]

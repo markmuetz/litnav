@@ -75,7 +75,9 @@ def _show(lib, rec, as_json=False):
     loc = r.get("location") or {}
     where = ", ".join(x for x in [loc.get("section") and f"§ {loc['section']}",
                                   loc.get("page") and f"p. {loc['page']} of the PDF text",
-                                  loc.get("passage") and f"passage {loc['passage']}"] if x)
+                                  loc.get("passage") and f"passage {loc['passage']}"
+                                  + (f" (+{len(loc['passages']) - 1} more)" if len(loc.get("passages", [])) > 1 else "")]
+                     if x)
     print(f"[@{r['key']}] {r['verdict'].upper()} ({r['confidence']} confidence)")
     print(f"  claim: {r['claim']}")
     if where:
