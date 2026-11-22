@@ -19,6 +19,14 @@ def add(sub):
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_verify)
 
+    p = sub.add_parser("eval-model", help="evaluate the local model's claim checks on an eval set "
+                       "(run: stores every reply; report: scores them)")
+    p.add_argument("action", choices=["run", "report"])
+    p.add_argument("eval", help="eval set (JSONL), e.g. eval/model-claims.jsonl")
+    p.add_argument("--run-dir", help="default derived/model-eval/<date>-<model>")
+    p.add_argument("--limit-minutes", type=float, default=88)
+    p.set_defaults(func=cmd_eval_model)
+
     p = sub.add_parser("models", help="the local model endpoints (profiles) and whether each is up")
     p.set_defaults(func=cmd_models)
 
@@ -192,3 +200,25 @@ def cmd_models(a):
         print(f"{mark} {name:10s} {cfg.get('model', '-'):40s} {cfg.get('url', '-')}")
         print(f"  {'':10s} {localmodel.ping(cfg)}")
     print("(* = in use; choose with -M NAME or $LITNAV_MODEL_PROFILE)", file=sys.stderr)
+
+
+def cmd_eval_model(a):
+    from .. import modeleval
+    lib = Library.find(a.library)
+    ev = Path(a.eval)
+    if not ev.is_absolute() and not ev.exists():
+        ev = lib.root / ev
+    if a.run_dir:
+        rd = Path(a.run_dir)
+    else:
+        import datetime as dt
+        m = lib.local_model.get("model", "model").replace(":", "-").replace("/", "-")
+        rd = lib.root / "derived" / "model-eval" / f"{dt.date.today().isoformat()}-{m}"
+    if a.action == "run":
+        r = modeleval.run(lib, ev, rd, limit_minutes=a.limit_minutes,
+                          log=lambda m: print(m, file=sys.stderr, flush=True))
+        print(json.dumps(r))
+    else:
+        rep = modeleval.report(lib, ev, rd)
+        (rd / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
+        print(json.dumps(rep["summary"], indent=1, default=str))

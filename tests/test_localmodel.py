@@ -404,3 +404,36 @@ def test_cite_forms():
 def test_clean_opencode_output():
     raw = "\x1b[0m\n> librarian · qwen3:30b-a3b\n\x1b[1mCold pools [@a2020b].\x1b[0m\n"
     assert asklocal.clean_output(raw) == "Cold pools [@a2020b]."
+
+
+# ---- eval-model
+
+from litnav import modeleval  # noqa: E402
+
+
+def test_eval_model_runs_and_scores(ilib, tmp_path, monkeypatch):
+    lib = strict(ilib)
+    ev = tmp_path / "ev.jsonl"
+    rows = [{"id": "c01", "key": "smith2021cold", "type": "true", "claim": "Cold pools spread.",
+             "ideal": "supported", "acceptable": ["supported"]},
+            {"id": "c02", "key": "smith2021cold", "type": "direction", "claim": "Cold pools shrink.",
+             "ideal": "contradicted", "acceptable": ["contradicted"]},
+            {"id": "r01", "key": "smith2021cold", "type": "true", "claim": "Cold pools spread.",
+             "ideal": "supported", "acceptable": ["supported"], "recheck_of": "c01",
+             "question": "Do they spread or shrink?", "doubt": "false"}]
+    ev.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    seen = []
+
+    def chat(url, model, messages, schema=None, **kw):
+        seen.append((messages[0]["content"][:20], "Question about this claim" in messages[1]["content"]))
+        v = "supported" if "spread" in messages[1]["content"].split("Paper:")[0] else "not_found"
+        return json.dumps({"verdict": v, "confidence": "high", "passage": "", "explanation": "x",
+                           "quote": "", "parts": [], "hedging": "matches", "mismatch": ""}), model
+    monkeypatch.setattr(batch_runner, "chat", chat)
+    rd = tmp_path / "run"
+    assert modeleval.run(lib, ev, rd, log=lambda m: None)["calls"] == 5        # 2 claims x A,B + 1 recheck
+    assert sum(q for _, q in seen) == 1
+    assert modeleval.run(lib, ev, rd, log=lambda m: None)["calls"] == 0        # resumes: nothing left
+    s = modeleval.report(lib, ev, rd)["summary"]
+    assert s["by_variant"]["A"] == {"n": 2, "ok": 1, "exact": 1}
+    assert s["by_variant"]["R"]["ok"] == 1 and s["confusion"]["B"]["contradicted->not_found"] == 1
