@@ -20,7 +20,12 @@ def fake_claude(monkeypatch, seen):
         elif "statements" in schema["properties"]:
             out = {"statements": [{"statement": "a", "verdict": "supported", "note": ""},
                                   {"statement": "b", "verdict": "wrong", "note": "sign"}],
-                   "key_points_covered": ["k1"], "keywords_ok": True}
+                   "key_points_covered": ["k1"], "keywords_ok": True,
+                   "items": [{"n": 1, "verdict": "correct", "kind": "finding", "hedging": "strong",
+                              "standalone": True, "note": ""},
+                             {"n": 2, "verdict": "overstated", "kind": "limitation", "hedging": "weak",
+                              "standalone": True, "note": ""}],
+                   "key_points_covered_all": ["k1", "k2"]}
         elif "claim_type" in schema["properties"]["claims"]["items"]["properties"]:
             out = {"claims": [{"n": 1, "verdict": "correct", "claim_type": "restated", "evidence_type": "theory",
                                "hedging": "strong", "standalone": True, "note": ""},
@@ -54,7 +59,11 @@ def test_paper_eval_end_to_end(ilib, tmp_path, monkeypatch):
             return {"claims": [{"claim": "Gravity waves radiate from squall lines observed by radar.",
                                 "kind": "finding", "numbers": [], "conditions": "", "strength": "shown",
                                 "passages": ids[:1]}]}
-        return {"topic": "t", "summary": "Gravity waves radiate. They are seen.", "keywords": ["waves"]}
+        ids = [l[1:].split("]")[0] for l in messages[1]["content"].splitlines() if l.startswith("[")]
+        it = {"kind": "finding", "statement": "Squall lines radiate gravity waves.", "numbers": [],
+              "conditions": "", "hedging": "strong", "chunks": ids[:1]}
+        return {"topic": "t", "summary": "Gravity waves radiate. They are seen.", "keywords": ["waves"],
+                "key_items": [it, {**it, "kind": "conclusion", "hedging": "moderate", "chunks": ["nope"]}]}
     FakeModel(monkeypatch, reply)
     monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake-14b", "machine": "m"})
     for task in ("summary", "extract"):
@@ -67,6 +76,9 @@ def test_paper_eval_end_to_end(ilib, tmp_path, monkeypatch):
         assert s["core_coverage"] == 1.0
         if task == "summary":
             assert s["precision"] == 0.5 and s["verdicts"] == {"supported": 1, "wrong": 1}
+            assert s["items"] == 2 and s["item_precision"] == 0.5 and s["items_located"] == 0.5
+            assert s["core_coverage_all"] == 1.0 and s["kp_coverage_all"] == 1.0
+            assert s["item_kind_accuracy"] == 0.5 and s["item_hedging_accuracy"] == 0.5
         else:
             assert s["claims"] == 1 and s["passages_valid"] == 1.0 and s["kp_coverage"] == 0.5
     reg = P.load(tmp_path / "runs.jsonl")

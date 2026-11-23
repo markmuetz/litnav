@@ -163,6 +163,12 @@ class Item:
         if s and (self.allowed(purpose) or self.allowed(sp)):
             d["summary"] = s.get("summary", "")
             d["topic"] = s.get("topic", "")
+            if s.get("key_items"):
+                d["key_items"] = [{"kind": x.get("kind"), "statement": x.get("statement"),
+                                   "conditions": x.get("conditions", ""), "hedging": x.get("hedging"),
+                                   "passages": x.get("chunks", []),
+                                   "check": (x.get("check") or {}).get("verdict", "unchecked")}
+                                  for x in s["key_items"]]
         return d
 
 

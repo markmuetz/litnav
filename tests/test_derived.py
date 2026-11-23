@@ -8,7 +8,8 @@ from litnav.net import Refused
 
 from test_search import ilib, FakeEmbedder  # noqa: F401
 
-GOOD = {"topic": "Cold pools.", "summary": "They spread.", "keywords": ["cold pools"]}
+GOOD = {"topic": "Cold pools.", "summary": "They spread.", "keywords": ["cold pools"],
+        "key_items": [{"kind": "finding", "statement": "Cold pools spread outward.", "numbers": [], "conditions": "", "hedging": "strong", "chunks": ["c1"]}]}
 
 
 def test_gate(ilib):
@@ -33,8 +34,7 @@ def test_gate_licensed_off(ilib):
 
 def test_write_stable(ilib):
     it = ilib.get("smith2021cold")
-    text, trunc = derived.text_for(it)
-    prov = derived.provenance(it, model="m", via="api", text=text, truncated=trunc)
+    prov = derived.provenance(it, model="m", via="api", chars=10, truncated=False)
     assert derived.write_summary(it, GOOD, prov)
     assert not derived.write_summary(it, GOOD, prov)          # unchanged: no write
     d = json.loads(it.summary_path.read_text())

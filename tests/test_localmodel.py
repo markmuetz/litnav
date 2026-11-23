@@ -33,7 +33,8 @@ class FakeModel:
         return ("<think>hmm</think>\n" + json.dumps(r)), model
 
 
-SUMMARY = {"topic": "Cold pools.", "summary": "Cold pools organise convection.", "keywords": ["cold pools"]}
+SUMMARY = {"topic": "Cold pools.", "summary": "Cold pools organise convection.", "keywords": ["cold pools"],
+           "key_items": [{"kind": "finding", "statement": "Cold pools spread outward.", "numbers": [], "conditions": "", "hedging": "strong", "chunks": ["c1"]}]}
 
 
 def test_purposes():
@@ -456,3 +457,42 @@ def test_verify_schema_limits_passages_to_the_ids_sent(ilib, monkeypatch):
     FakeModel(monkeypatch, reply)
     r = Tools(lib, purpose=S.SEND_OUT, embedder=None).verify_claim("smith2021cold", "cold pools spread")
     assert r["location"]["passage"] == ids[0] and r["location"]["passages"] == ids[:2]
+
+
+def test_summary_v2_passages_copy_check_and_item_checks(ilib, monkeypatch):
+    from litnav import derived, index
+    lib = strict(ilib)
+    it = lib.get("smith2021cold")
+    # passages carry the index's chunk ids, without needing the index
+    inp = derived.summary_input(it)
+    con = index.connect(lib, readonly=True)
+    try:
+        indexed = {r[0] for r in con.execute("SELECT id FROM chunks WHERE key=?", (it.key,))}
+    finally:
+        con.close()
+    assert inp["ids"] and set(inp["ids"]) <= indexed
+    assert inp["schema"]["properties"]["key_items"]["items"]["properties"]["chunks"]["items"]["enum"] == inp["ids"]
+    assert f"[{inp['ids'][0]}]" in inp["prompt"]
+    # a summary that copies a long run from the paper is refused
+    words = " ".join(it.text().split()[:30])
+    copied = {**SUMMARY, "summary": words}
+    assert "copies a run" in derived.check(it, copied)
+    assert derived.check(it, SUMMARY) is None
+    assert derived.check(it, {**SUMMARY, "key_items": []}) == "summary did not match the schema"
+    item = {"kind": "limitation", "statement": "Cold pools were not observed over land.", "numbers": [],
+            "conditions": "", "hedging": "moderate", "chunks": inp["ids"][:1]}
+    m = FakeModel(monkeypatch, lambda msgs: {**SUMMARY, "key_items": SUMMARY["key_items"] + [item]}
+                  if "Summarize" in msgs[1]["content"] else
+                  {"verdict": "not_found", "confidence": "low", "passages": [], "explanation": "e", "quote": ""})
+    assert cli.main(["-L", str(lib.root), "summarize", "--via", "local", it.key]) == 0
+    s = lib.get(it.key).summary()
+    assert s["provenance"]["prompt_version"] == derived.PROMPT_VERSION and len(s["key_items"]) == 2
+    assert s["key_items"][1]["chunks"] == inp["ids"][:1] and s["provenance"]["copied_run"] < 12
+    # the corpus check: a verdict per item, written into the item; the item's own passage is sent
+    assert cli.main(["-L", str(lib.root), "check-summaries", it.key]) == 0
+    s = lib.get(it.key).summary()
+    assert [x["check"]["verdict"] for x in s["key_items"]] == ["not_found", "not_found"]
+    assert f"[{inp['ids'][0]}]" in m.sent[-1][1]["content"]
+    assert localmodel.item_check_jobs(lib, lib.get(it.key)) == []        # done: nothing left
+    d = lib.get(it.key).as_dict(S.SEND_OUT)                           # what an outside model sees
+    assert d["key_items"][1]["kind"] == "limitation" and d["key_items"][1]["check"] == "not_found"

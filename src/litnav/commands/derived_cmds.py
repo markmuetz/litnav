@@ -1,4 +1,4 @@
-"""summarize, themes."""
+"""summarize, check-summaries, themes."""
 from __future__ import annotations
 
 import os
@@ -23,12 +23,54 @@ def add(sub):
                         "[local_model] is set, else api if ANTHROPIC_API_KEY is set, else claude-code")
     p.add_argument("--model", help=f"default: {derived.SUMMARY_MODEL} (api), "
                    f"{derived.CLAUDE_CODE_SUMMARY_MODEL} (claude-code)")
+    p.add_argument("--max-chars", type=int, help="local/queue: characters of each paper the model reads "
+                   "(default [local_model] max_chars, 90000; 0 = the whole paper, for a long-context "
+                   "model such as the cluster's)")
     p.add_argument("--dry-run", "-n", action="store_true", help="list what would be summarized")
     p.add_argument("--yes", "-y", action="store_true", help="don't ask before a long claude-code run")
     p.add_argument("--jobs", "-j", type=int, default=1,
                    help="claude-code: papers at a time (e.g. 5); uses your plan's usage that much faster")
     p.set_defaults(func=cmd_summarize)
+    p = sub.add_parser("check-summaries", help="the local model checks each key item of each summary "
+                       "against the paper, in a fresh context (verify); the verdict goes into the item")
+    p.add_argument("keys", nargs="*", help="only these papers (default: every summary with key items)")
+    p.add_argument("--tag", "-t")
+    p.add_argument("--limit", type=int, help="at most this many papers")
+    p.add_argument("--force", action="store_true", help="re-check items already checked")
+    p.add_argument("--via", choices=["local", "queue"], default="local",
+                   help="local: now, with [local_model]; queue: add to the batch for the cluster")
+    p.add_argument("--dry-run", "-n", action="store_true")
+    p.set_defaults(func=cmd_check_summaries)
     add_themes(sub)
+
+
+def cmd_check_summaries(a):
+    from .. import localmodel, sharing as S
+    lib = Library.find(a.library)
+    items = [lib.get(k) for k in a.keys] if a.keys else list(lib.items(purpose=S.LOCAL_MODEL, tag=a.tag))
+    jobs, papers = [], 0
+    for it in items:
+        if not it.allowed(S.LOCAL_MODEL) or not it.has_text:
+            continue
+        js = localmodel.item_check_jobs(lib, it, force=a.force)
+        if js:
+            papers += 1
+            jobs += js
+            if a.limit and papers >= a.limit:
+                break
+    if not jobs:
+        print("Nothing to check.")
+        return
+    if a.dry_run:
+        print(f"{len(jobs)} key item(s) to check in {papers} paper(s)")
+        return
+    if a.via == "queue":
+        n = localmodel.enqueue(lib, jobs)
+        print(f"queued {n} check(s) ({len(jobs) - n} already queued); `litnav queue push` sends them")
+        return
+    st = localmodel.run_now(lib, jobs, log=lambda m: print(m, file=sys.stderr))
+    bad = [r for r in st if r.get("record", {}).get("verdict") in ("contradicted", "not_found")]
+    print(f"checked {sum(r['status'] == 'ok' for r in st)} item(s); {len(bad)} contradicted or not found")
 
 
 def _via(a, lib=None):
@@ -56,7 +98,8 @@ def _summarize_local(lib, a, via):
         for it in items:
             print(f"  {it.key}")
         return
-    jobs = [localmodel.summarize_job(it) for it in items]
+    limit = 10 ** 9 if a.max_chars == 0 else a.max_chars
+    jobs = [localmodel.summarize_job(it, limit) for it in items]
     if via == "queue":
         n = localmodel.enqueue(lib, jobs)
         print(f"queued {n} summary job(s) ({len(jobs) - n} already queued); "

@@ -14,9 +14,17 @@ Summaries (map step, one per paper) default to Haiku. Two routes:
                thousand papers). Each summary is
                written as it finishes, so an interrupted run just resumes.
 
-summary.json:
-  {"topic", "summary", "keywords", "provenance": {model, via, prompt_version,
-   text_sha256, text_source, chars_sent, truncated}}
+summary.json (prompt v2, Mark 23 Nov 2026; v1 had no key_items and 2-4 sentences):
+  {"topic", "summary" (200-250 words), "keywords",
+   "key_items": [{kind (method / finding / conclusion / limitation), statement,
+                  numbers, conditions, hedging, chunks (1-2 passage ids),
+                  check (the local model's verification, `litnav check-summaries`)}],
+   "provenance": {model, via, prompt_version, text_sha256, text_source,
+                  chars_sent, truncated, copied_run}}
+Summaries stand in for the paper wherever its text may not go (Claude, ask,
+agents), so they are longer than a triage note, every key item names the
+passages it rests on (so it can be checked), and none may copy a run of
+COPY_LIMIT words from the paper: one that does is rejected and redone.
 No date in provenance: it would turn every --force into a whole-corpus diff.
 A summary is current when text sha, model and prompt version all match.
 """
@@ -35,27 +43,64 @@ from .util import atomic_write, sha256_file
 SUMMARY_MODEL = "claude-haiku-5-5"
 CLAUDE_CODE_SUMMARY_MODEL = "haiku"
 THEMES_MODEL = "claude-opus-5-5"
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2               # v2: 200-250 words, key items with passage ids
 MAX_TEXT_CHARS = 150_000
 SUMMARY_MAX_TOKENS = 8000        # Haiku thinks by default; thinking counts against this
 
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "topic": {"type": "string", "description": "One concise sentence: what the paper is about."},
-        "summary": {"type": "string",
-                    "description": "2-4 sentences covering aims, methods and key findings."},
-        "keywords": {"type": "array", "items": {"type": "string"},
-                     "description": "4-8 lower-case topical keywords."},
-    },
-    "required": ["topic", "summary", "keywords"],
-    "additionalProperties": False,
-}
+ITEM_KINDS = ["method", "finding", "conclusion", "limitation"]
+HEDGING = ["strong", "moderate", "weak"]
+COPY_LIMIT = 12                  # words: a longer run copied from the paper is rejected
 
-SYSTEM = ("You summarize academic papers for a personal literature database. The text "
-          "was extracted from a PDF and may be noisy (running heads, references, OCR "
-          "errors). Be concise and factual; do not invent details.")
-INSTRUCTION = "Summarize this paper.\n\nPaper text:\n{text}"
+
+def schema(ids: list[str] | None = None) -> dict:
+    """The summary schema; with `ids`, key items may name only those passages."""
+    chunk = {"type": "string", **({"enum": list(ids)} if ids else {})}
+    return {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string", "description": "One concise sentence: what the paper is about."},
+            "summary": {"type": "string", "description": (
+                "200-250 words of prose: the question and why it matters; the data and methods; the "
+                "main findings, with numbers; the conclusions; the limitations or caveats.")},
+            "keywords": {"type": "array", "items": {"type": "string"},
+                         "description": "4-8 lower-case topical keywords."},
+            "key_items": {"type": "array", "minItems": 8, "maxItems": 15, "items": {
+                "type": "object", "properties": {
+                    "kind": {"type": "string", "enum": ITEM_KINDS},
+                    "statement": {"type": "string"},
+                    "numbers": {"type": "array", "items": {"type": "string"}},
+                    "conditions": {"type": "string"},
+                    "hedging": {"type": "string", "enum": HEDGING},
+                    "chunks": {"type": "array", "minItems": 1, "maxItems": 2, "items": chunk}},
+                "required": ["kind", "statement", "numbers", "conditions", "hedging", "chunks"],
+                "additionalProperties": False}},
+        },
+        "required": ["topic", "summary", "keywords", "key_items"],
+        "additionalProperties": False,
+    }
+
+
+SCHEMA = schema()
+
+SYSTEM = (
+    "You summarize academic papers for a personal literature database. People and models use the "
+    "summary in place of the paper where its text can't be shared, so it must be accurate and "
+    "specific. The paper's text, extracted from a PDF and possibly noisy (running heads, OCR "
+    "errors), is given as numbered passages. Do not invent details. Write in your own words: never "
+    "copy a run of words from the paper.\n"
+    "- topic: one sentence, what the paper is about.\n"
+    "- summary: 200-250 words of prose: the question and why it matters; the data and methods; the "
+    "main findings, with their numbers; the conclusions; and the limitations or caveats the paper "
+    "states.\n"
+    "- keywords: 4-8, lower case.\n"
+    "- key_items: 8-15 of the paper's key methods, findings, conclusions and limitations, the most "
+    "important first. Each statement is one standalone sentence a reader understands without the "
+    "paper: name the model, region, period and quantity; keep numbers with units and the direction "
+    "of each effect. numbers: the numbers it states, as written. conditions: where and when it "
+    "holds ('' if general). hedging: how firmly the paper states it: strong (shows, demonstrates), "
+    "moderate (suggests, indicates), weak (may, could). chunks: the ids of the one or two passages "
+    "that state it. Include at least one limitation if the paper states any.")
+INSTRUCTION = "Summarize this paper.\n\nPaper: {title} ({year})\n\nPassages:\n{text}"
 OCR_NOTE = ("\n\nThe text came from OCR: equations and figure captions are unreliable, so "
             "do not rely on them.")
 
@@ -75,6 +120,34 @@ def outbound(lib, items, what="text"):
 def text_for(it, max_chars: int = MAX_TEXT_CHARS) -> tuple[str, bool]:
     t = it.text().strip()
     return t[:max_chars], len(t) > max_chars
+
+
+def passages(it, max_chars: int = MAX_TEXT_CHARS) -> tuple[list[dict], bool]:
+    """The paper as numbered passages (the index's chunk ids, computed the same
+    way, so no index is needed), in order, within max_chars; acknowledgements
+    left out. Returns (passages, truncated)."""
+    from . import chunks as C, sections as Sec
+    manual = it.meta.get("files", {}).get("sections") == "manual"
+    cs = [c for c in C.chunk(it.key, Sec.parse(it.text(), manual=manual)) if c.kind != "ack"]
+    out, used = [], 0
+    for c in cs:
+        if used >= max_chars:
+            return out, True
+        t = c.text[:max_chars - used]
+        used += len(t)
+        out.append({"id": c.id, "section": c.section_title or c.kind, "text": t})
+    return out, False
+
+
+def passage_body(ps: list[dict]) -> str:
+    return "\n\n".join(f"[{p['id']}] ({p['section']})\n{p['text']}" for p in ps)
+
+
+def summary_input(it, max_chars: int = MAX_TEXT_CHARS) -> dict:
+    ps, trunc = passages(it, max_chars)
+    ids = [p["id"] for p in ps]
+    return {"prompt": _prompt(it, passage_body(ps)), "ids": ids, "schema": schema(ids),
+            "chars": sum(len(p["text"]) for p in ps), "truncated": trunc}
 
 
 def is_current(it, model: str) -> bool:
@@ -115,24 +188,69 @@ def select(lib, *, keys=None, tag=None, force=False, stale=False, limit=None, mo
     return out[:limit] if limit else out
 
 
-def provenance(it, *, model, via, text, truncated) -> dict:
+def provenance(it, *, model, via, chars, truncated) -> dict:
     return {"model": model, "via": via, "prompt_version": PROMPT_VERSION,
             "text_sha256": sha256_file(it.text_path),
             "text_source": it.meta.get("files", {}).get("text_source", ""),
-            "chars_sent": len(text), "truncated": truncated}
+            "chars_sent": chars, "truncated": truncated}
 
 
 def valid(d) -> bool:
+    items = d.get("key_items") if isinstance(d, dict) else None
     return (isinstance(d, dict) and isinstance(d.get("topic"), str) and d["topic"].strip()
             and isinstance(d.get("summary"), str) and d["summary"].strip()
             and isinstance(d.get("keywords"), list)
-            and all(isinstance(k, str) for k in d["keywords"]))
+            and all(isinstance(k, str) for k in d["keywords"])
+            and isinstance(items, list) and len(items) >= 1
+            and all(isinstance(x, dict) and isinstance(x.get("statement"), str) and x["statement"].strip()
+                    and x.get("kind") in ITEM_KINDS and isinstance(x.get("chunks"), list) for x in items))
+
+
+# ---- copying: no run of COPY_LIMIT words from the paper
+
+def ngrams(text: str, n: int = 6) -> set:
+    w = re.findall(r"[a-z0-9]+", text.lower())
+    return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+
+
+def copied_run(out_text: str, paper_grams: set, n: int = 6) -> int:
+    """Longest run of words copied from the paper (0 if under n)."""
+    w = re.findall(r"[a-z0-9]+", out_text.lower())
+    best = run = 0
+    for i in range(len(w) - n + 1):
+        if " ".join(w[i:i + n]) in paper_grams:
+            run = run + 1 if run else n
+            best = max(best, run)
+        else:
+            run = 0
+    return best
+
+
+def summary_copied_run(it, d: dict) -> int:
+    grams = ngrams(it.text())
+    parts = [d.get("topic", ""), d.get("summary", "")] + [x.get("statement", "") for x in d.get("key_items") or []]
+    return max((copied_run(p, grams) for p in parts), default=0)
+
+
+def check(it, d) -> str | None:
+    """Why a model's summary can't be written (None if it can)."""
+    if not valid(d):
+        return "summary did not match the schema"
+    run = summary_copied_run(it, d)
+    if run >= COPY_LIMIT:
+        return f"copies a run of {run} words from the paper (limit {COPY_LIMIT - 1})"
+    return None
 
 
 def write_summary(it, data: dict, prov: dict) -> bool:
     """Write summary.json in a stable layout; False if nothing changed."""
+    items = [{"kind": x["kind"], "statement": x["statement"].strip(),
+              "numbers": [str(n) for n in x.get("numbers") or []], "conditions": (x.get("conditions") or "").strip(),
+              "hedging": x.get("hedging"), "chunks": list(x.get("chunks") or [])}
+             for x in data.get("key_items") or []]
+    prov = {**prov, "copied_run": summary_copied_run(it, data)}
     d = {"topic": data["topic"].strip(), "summary": data["summary"].strip(),
-         "keywords": [k.strip() for k in data["keywords"] if k.strip()], "provenance": prov}
+         "keywords": [k.strip() for k in data["keywords"] if k.strip()], "key_items": items, "provenance": prov}
     new = json.dumps(d, indent=2, ensure_ascii=False) + "\n"
     if it.summary_path.is_file() and it.summary_path.read_text("utf-8") == new:
         return False
@@ -140,9 +258,9 @@ def write_summary(it, data: dict, prov: dict) -> bool:
     return True
 
 
-def _prompt(it, text):
+def _prompt(it, body):
     note = OCR_NOTE if it.meta.get("files", {}).get("text_source", "").startswith("ocr") else ""
-    return INSTRUCTION.format(text=text) + note
+    return INSTRUCTION.format(title=it.title, year=it.year, text=body) + note
 
 
 # ---- route 1: the Anthropic API (Message Batches)
@@ -151,10 +269,10 @@ def state_path(lib):
     return lib.index_dir / "summarize_batch.json"
 
 
-def _params(it, text, model):
+def _params(it, inp, model):
     return {"model": model, "max_tokens": SUMMARY_MAX_TOKENS, "system": SYSTEM,
-            "messages": [{"role": "user", "content": _prompt(it, text)}],
-            "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}, "effort": "low"}}
+            "messages": [{"role": "user", "content": inp["prompt"]}],
+            "output_config": {"format": {"type": "json_schema", "schema": inp["schema"]}, "effort": "low"}}
 
 
 def _parse_message(msg) -> tuple[dict | None, str | None]:
@@ -165,7 +283,7 @@ def _parse_message(msg) -> tuple[dict | None, str | None]:
         d = json.loads(text)
     except json.JSONDecodeError as e:
         return None, f"bad JSON: {e}"
-    return (d, None) if valid(d) else (None, "JSON does not match the schema")
+    return d, None
 
 
 def api_submit(lib, items, model=SUMMARY_MODEL, log=print) -> list[str]:
@@ -179,23 +297,25 @@ def api_submit(lib, items, model=SUMMARY_MODEL, log=print) -> list[str]:
     client = anthropic.Anthropic()
     written = []
     first, rest = items[0], items[1:]
-    text, trunc = text_for(first)
-    msg = client.messages.create(**_params(first, text, model))
+    inp = summary_input(first)
+    msg = client.messages.create(**_params(first, inp, model))
     d, err = _parse_message(msg)
+    err = err or check(first, d)
     if err:
         raise RuntimeError(f"{first.key}: {err}")
-    if write_summary(first, d, provenance(first, model=model, via="api", text=text, truncated=trunc)):
+    if write_summary(first, d, provenance(first, model=model, via="api", chars=inp["chars"],
+                                          truncated=inp["truncated"])):
         written.append(first.key)
     log(f"{first.key}: summarized (test request)")
     if not rest:
         return written
     reqs, ids = [], {}
     for i, it in enumerate(rest):
-        text, trunc = text_for(it)
+        inp = summary_input(it)
         cid = f"p{i:05d}"
-        ids[cid] = {"key": it.key, "sha": sha256_file(it.text_path), "chars": len(text),
-                    "truncated": trunc}
-        reqs.append({"custom_id": cid, "params": _params(it, text, model)})
+        ids[cid] = {"key": it.key, "sha": sha256_file(it.text_path), "chars": inp["chars"],
+                    "truncated": inp["truncated"]}
+        reqs.append({"custom_id": cid, "params": _params(it, inp, model)})
     batch = client.messages.batches.create(requests=reqs)
     atomic_write(state_path(lib), json.dumps({"batch_id": batch.id, "model": model, "items": ids},
                                              indent=1))
@@ -234,6 +354,7 @@ def api_collect(lib, log=print) -> tuple[list[str], bool]:
             log(f"{key}: {r.result.type}; left for the next run")
             continue
         d, err = _parse_message(r.result.message)
+        err = err or check(it, d)
         if err:
             failed += 1
             log(f"{key}: {err}; left for the next run")
@@ -310,10 +431,10 @@ def claude_code_summarize(lib, items, model=CLAUDE_CODE_SUMMARY_MODEL, jobs: int
         if stop.is_set():
             return
         outbound(lib, [it])          # sharing may change during a long run
-        text, trunc = text_for(it)
+        inp = summary_input(it)
         try:
-            env = run_claude(claude_code_args(model, SCHEMA),
-                             "Summarize the paper whose text follows.\n\n" + _prompt(it, text))
+            env = run_claude(claude_code_args(model, inp["schema"]),
+                             "Summarize the paper whose text follows.\n\n" + inp["prompt"])
         except Stop as e:
             if not stop.is_set():
                 stop.set()
@@ -325,13 +446,14 @@ def claude_code_summarize(lib, items, model=CLAUDE_CODE_SUMMARY_MODEL, jobs: int
                 log(f"[{n}/{total}] {it.key}: failed ({e}); left for the next run")
             return
         d = env.get("structured_output")
-        if not valid(d):
+        err = check(it, d)
+        if err:
             with lock:
-                log(f"[{n}/{total}] {it.key}: output did not match the schema; left for the next run")
+                log(f"[{n}/{total}] {it.key}: {err}; left for the next run")
             return
         real = next(iter(env.get("modelUsage") or {}), model)
-        changed = write_summary(it, d, provenance(it, model=real, via="claude-code", text=text,
-                                                  truncated=trunc))
+        changed = write_summary(it, d, provenance(it, model=real, via="claude-code", chars=inp["chars"],
+                                                  truncated=inp["truncated"]))
         with lock:
             if changed:
                 written.append(it.key)

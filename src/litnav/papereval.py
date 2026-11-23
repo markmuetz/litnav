@@ -213,7 +213,7 @@ def build_job(lib, key: str, task: str, chars: int | None = EVAL_CHARS) -> dict:
     if task == "summary":
         j = localmodel.summarize_job(it, limit=chars or 10 ** 9)
         return {"id": f"summary-{key}", "kind": "eval", "task": task, "key": key, "schema": j["schema"],
-                "messages": j["messages"], "chars_sent": j["chars_sent"], "passages": []}
+                "messages": j["messages"], "chars_sent": j["chars_sent"], "passages": j.get("passages", [])}
     ps = chunks_for(lib, it, chars)
     body = "\n\n".join(f"[{p['id']}] ({p['section']})\n{p['text']}" for p in ps)
     ids = [p["id"] for p in ps]
@@ -347,7 +347,17 @@ SUMMARY_JUDGE = {"type": "object", "properties": {
         "verdict": {"type": "string", "enum": ["supported", "overstated", "wrong", "unsupported"]},
         "note": {"type": "string"}}, "required": ["statement", "verdict", "note"]}},
     "key_points_covered": {"type": "array", "items": {"type": "string"}},
-    "keywords_ok": {"type": "boolean"}}, "required": ["statements", "key_points_covered", "keywords_ok"]}
+    "items": {"type": "array", "items": {"type": "object", "properties": {
+        "n": {"type": "integer"},
+        "verdict": {"type": "string", "enum": ["correct", "wrong_detail", "overstated", "not_in_paper",
+                                               "trivial"]},
+        "kind": {"type": "string", "enum": derived.ITEM_KINDS},
+        "hedging": {"type": "string", "enum": derived.HEDGING},
+        "standalone": {"type": "boolean"},
+        "note": {"type": "string"}}, "required": ["n", "verdict", "kind", "hedging", "standalone", "note"]}},
+    "key_points_covered_all": {"type": "array", "items": {"type": "string"}},
+    "keywords_ok": {"type": "boolean"}},
+    "required": ["statements", "key_points_covered", "items", "key_points_covered_all", "keywords_ok"]}
 EXTRACT_JUDGE = {"type": "object", "properties": {
     "claims": {"type": "array", "items": {"type": "object", "properties": {
         "n": {"type": "integer"},
@@ -376,7 +386,7 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
                                                                        "items": {"type": "integer"}}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 1, "extract": 1, "mentions": 3}
+JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 3}   # summary 2: key items too
 
 
 def _mention_line(n, m) -> str:
@@ -398,13 +408,27 @@ def judge_prompt(task, it, text, kps, out) -> str:
     kp = "\n".join(f"{k['id']}{' (core)' if k.get('core') else ''}: {k['point']}" for k in kps)
     head = f"Paper: {it.title} ({it.year})\n\nThe paper's key points (reference):\n{kp}\n\n"
     if task == "summary":
+        items = out.get("key_items") or []
+        listing = "\n".join(f"{n}. [{x.get('kind')}; hedging {x.get('hedging')}] {x.get('statement')}"
+                            + (f" (conditions: {x['conditions']})" if x.get("conditions") else "")
+                            for n, x in enumerate(items, 1)) or "(none)"
         body = (f"Model's summary:\nTopic: {out.get('topic')}\nSummary: {out.get('summary')}\n"
-                f"Keywords: {', '.join(out.get('keywords') or [])}\n\n"
-                "1. Split the topic and summary into their factual statements. Give each a verdict: "
-                "supported (the paper says it), overstated (more certain or general than the paper), wrong "
-                "(a number, direction, method or condition differs), unsupported (not in the paper).\n"
-                "2. key_points_covered: the ids of the key points the summary substantially conveys.\n"
-                "3. keywords_ok: are the keywords topical and lower-case?\n")
+                f"Keywords: {', '.join(out.get('keywords') or [])}\nKey items:\n{listing}\n\n"
+                "1. Split the topic and summary (the prose, not the key items) into their factual "
+                "statements. Give each a verdict: supported (the paper says it), overstated (more certain or "
+                "general than the paper), wrong (a number, direction, method or condition differs), "
+                "unsupported (not in the paper).\n"
+                "2. key_points_covered: the ids of the key points the topic and summary prose substantially "
+                "convey.\n"
+                "3. items: for each key item n, a verdict: correct; wrong_detail (a number, unit, direction, "
+                "method or condition differs); overstated (stronger or more general than the paper); "
+                "not_in_paper; trivial (true but says nothing useful). Then its right kind (method, finding, "
+                "conclusion, limitation) and hedging (strong: shows, demonstrates; moderate: suggests, "
+                "indicates; weak: may, could), from the paper, whatever the model said; and standalone: is "
+                "it understandable without the paper? An empty list if there are no key items.\n"
+                "4. key_points_covered_all: the ids of the key points conveyed by the prose and the key items "
+                "together.\n"
+                "5. keywords_ok: are the keywords topical and lower-case?\n")
     elif task == "mentions":
         lines = "\n".join(_mention_line(n, m) for n, m in enumerate(out.get("mentions") or [], 1))
         body = (f"Model's extracted claims (mentions), each with its labels:\n{lines}\n\n"
@@ -515,22 +539,11 @@ def judge(lib, eval_path: Path, run_dir: Path, *, model=None, jobs=4, judge_with
 
 # ---- scoring
 
-def copied_run(out_text: str, paper_words: set, n: int = 6) -> int:
-    """Longest run of words copied from the paper (0 if under n)."""
-    w = re.findall(r"[a-z0-9]+", out_text.lower())
-    best = run = 0
-    for i in range(len(w) - n + 1):
-        if " ".join(w[i:i + n]) in paper_words:
-            run = run + 1 if run else n
-            best = max(best, run)
-        else:
-            run = 0
-    return best
+copied_run = derived.copied_run        # one definition, shared with the summary writer
 
 
 def _ngrams(text, n=6):
-    w = re.findall(r"[a-z0-9]+", text.lower())
-    return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+    return derived.ngrams(text, n)
 
 
 def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> dict:
@@ -553,8 +566,15 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
         if out is not None:
             grams = _ngrams(text)
             if task == "summary":
-                row["copied_run"] = copied_run(f"{out.get('topic', '')} {out.get('summary', '')}", grams)
+                ki = out.get("key_items") or []
+                row["copied_run"] = max([copied_run(f"{out.get('topic', '')} {out.get('summary', '')}", grams)]
+                                        + [copied_run(x.get("statement", ""), grams) for x in ki])
                 row["sentences"] = len(re.findall(r"[.!?](\s|$)", out.get("summary") or ""))
+                row["words"] = len((out.get("summary") or "").split())
+                row["items"] = len(ki)
+                row["items_located"] = sum(bool(x.get("chunks")) and all(c in r["passages"] for c in x["chunks"])
+                                           for x in ki)
+                row["item_labels"] = [{"kind": x.get("kind"), "hedging": x.get("hedging")} for x in ki]
             elif task == "mentions":
                 ms = out.get("mentions") or []
                 row["claims"] = len(ms)
@@ -593,6 +613,16 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
             row["_all_ids"] = sorted(k["id"] for k in kps)
             items = jd.get("statements") if task == "summary" else jd.get("claims")
             row["verdicts"] = dict(Counter(x.get("verdict") for x in items or []))
+            if task == "summary" and "items" in jd:
+                ji = jd.get("items") or []
+                row["item_verdicts"] = dict(Counter(x.get("verdict") for x in ji))
+                labels = row.get("item_labels") or []
+                for f in ("kind", "hedging"):
+                    row[f"{f}_pairs"] = [[labels[x["n"] - 1][f], x.get(f)] for x in ji
+                                         if isinstance(x.get("n"), int) and 0 < x["n"] <= len(labels)]
+                cov_all = set(jd.get("key_points_covered_all") or []) | covered
+                row["core_covered_all"] = len(cov_all & core)
+                row["kp_covered_all"] = len(cov_all & {k["id"] for k in kps})
             if task == "mentions":
                 labels = row.get("model_labels") or []
                 for f in ("claim_type", "evidence_type", "hedging"):
@@ -662,6 +692,27 @@ def summarize(task, rows) -> dict:
     s["precision_ci"] = evalstats.bootstrap_ratio(
         [(r["verdicts"].get(good, 0), sum(r["verdicts"].values())) for r in j])
     s["core_coverage_ci"] = evalstats.bootstrap_ratio([(r["core_covered"], r["core"]) for r in j])
+    if task == "summary" and any("item_verdicts" in r for r in j):
+        ji = [r for r in j if "item_verdicts" in r]
+        iv = Counter()
+        for r in ji:
+            iv.update(r["item_verdicts"])
+        ni = sum(iv.values())
+        n_items = sum(r.get("items", 0) for r in rows)
+        s.update({
+            "words_median": sorted(r["words"] for r in rows if "words" in r)[len([r for r in rows if "words" in r]) // 2]
+            if any("words" in r for r in rows) else None,
+            "items": n_items, "items_per_paper": round(n_items / max(1, s["outputs"]), 1),
+            "items_located": round(sum(r.get("items_located", 0) for r in rows) / max(1, n_items), 3),
+            "item_verdicts": dict(iv), "item_precision": round(iv["correct"] / ni, 3) if ni else None,
+            "item_precision_ci": evalstats.bootstrap_ratio(
+                [(r["item_verdicts"].get("correct", 0), sum(r["item_verdicts"].values())) for r in ji]),
+            "core_coverage_all": round(sum(r["core_covered_all"] for r in ji) / max(1, sum(r["core"] for r in ji)), 3),
+            "core_coverage_all_ci": evalstats.bootstrap_ratio([(r["core_covered_all"], r["core"]) for r in ji]),
+            "kp_coverage_all": round(sum(r["kp_covered_all"] for r in ji) / max(1, sum(r["kp"] for r in ji)), 3)})
+        for f in ("kind", "hedging"):
+            pairs = [tuple(x) for r in ji for x in r.get(f"{f}_pairs", [])]
+            s[f"item_{f}_accuracy"] = round(sum(a == b for a, b in pairs) / len(pairs), 3) if pairs else None
     if task == "mentions":
         n = sum(r.get("claims", 0) for r in rows)
         s.update({"claims": n, "claims_per_paper": round(n / max(1, s["outputs"]), 1),

@@ -190,23 +190,58 @@ def max_chars(lib) -> int:
 def summarize_job(it, limit: int | None = None) -> dict:
     from . import derived
     gate(it)
-    text, trunc = derived.text_for(it, limit or max_chars(it.lib))
+    inp = derived.summary_input(it, limit or max_chars(it.lib))
     sha = sha256_file(it.text_path)
-    return {"id": f"summarize-{it.key}-{sha[:12]}", "kind": "summarize", "key": it.key,
-            "text_sha256": sha, "chars_sent": len(text), "truncated": trunc,
-            "schema": derived.SCHEMA,
+    return {"id": f"summarize-{it.key}-{sha[:12]}-v{derived.PROMPT_VERSION}", "kind": "summarize",
+            "key": it.key, "text_sha256": sha, "chars_sent": inp["chars"], "truncated": inp["truncated"],
+            "schema": inp["schema"], "passages": inp["ids"],
             "messages": [{"role": "system", "content": derived.SYSTEM},
-                         {"role": "user", "content": derived._prompt(it, text)
-                          + "\n\nReply with JSON only: {\"topic\", \"summary\", \"keywords\"}."}]}
+                         {"role": "user", "content": inp["prompt"] + "\n\nReply with JSON only."}]}
+
+
+def item_check_jobs(lib, it, *, force: bool = False) -> list[dict]:
+    """A verify job for each key item of a paper's summary not yet checked
+    (at the current verify prompt), with the passages the item names added
+    to the ones search finds for it."""
+    from . import derived
+    s = it.summary() or {}
+    out = []
+    for n, x in enumerate(s.get("key_items") or []):
+        c = x.get("check") or {}
+        if not force and c.get("prompt_version") == VERIFY_PROMPT_VERSION and c.get("statement") == x["statement"]:
+            continue
+        j = verify_job(lib, it.key, x["statement"], extra=x.get("chunks") or [])
+        j["summary_item"] = {"n": n, "statement": x["statement"],
+                             "summary_prompt": s.get("provenance", {}).get("prompt_version", derived.PROMPT_VERSION)}
+        j["id"] = f"{j['id']}-item{n}"
+        out.append(j)
+    return out
+
+
+def _record_item_check(it, job, rec) -> bool:
+    """Put a verdict into the summary's key item, if the summary still has it."""
+    from . import derived
+    s = it.summary()
+    si = job["summary_item"]
+    items = (s or {}).get("key_items") or []
+    if not (0 <= si["n"] < len(items)) or items[si["n"]].get("statement") != si["statement"]:
+        return False
+    items[si["n"]]["check"] = {"verdict": rec["verdict"], "confidence": rec["confidence"],
+                               "passages": rec["location"].get("passages", []), "model": rec["model"],
+                               "via": rec["via"], "prompt_version": rec["prompt_version"],
+                               "statement": si["statement"], "date": rec["date"]}
+    atomic_write(it.summary_path, json.dumps(s, indent=2, ensure_ascii=False) + "\n")
+    return True
 
 
 def _page(text: str, offset: int) -> int | None:
     return text.count("\f", 0, offset) + 1 if "\f" in text else None
 
 
-def passages_for(lib, it, claim: str, k: int = 8) -> list[dict]:
-    """The paper's opening passages (header, citation line, abstract) and
-    the ones that best match the claim, in reading order, within a budget."""
+def passages_for(lib, it, claim: str, k: int = 8, extra: list[str] | None = None) -> list[dict]:
+    """The paper's opening passages (header, citation line, abstract), any
+    `extra` passages named (a summary item's own), and the ones that best
+    match the claim, in reading order, within a budget."""
     from . import index, search
     con = index.connect(lib, readonly=True)
     try:
@@ -220,12 +255,15 @@ def passages_for(lib, it, claim: str, k: int = 8) -> list[dict]:
             emb = None
         f = search.Filters(keys=[it.key])
         hits = search.search(con, claim, embedder=emb, k=k, filters=f, purpose=S.LOCAL_MODEL)
+        named = [dict(r) for r in con.execute(
+            f"SELECT id, section_title, kind, start, \"end\", text FROM chunks WHERE key=? AND id IN "
+            f"({','.join('?' * len(extra or []))})", (it.key, *(extra or [])))] if extra else []
         ordmap = {r["id"]: r["ord"] for r in con.execute(
             "SELECT id, ord FROM chunks WHERE key=?", (it.key,))}
     finally:
         con.close()
     seen, out, budget = set(), [], MAX_VERIFY_CHARS
-    for r in first + hits:
+    for r in first + named + hits:
         if r["id"] in seen or budget <= 0:
             continue
         seen.add(r["id"])
@@ -237,12 +275,12 @@ def passages_for(lib, it, claim: str, k: int = 8) -> list[dict]:
     return out
 
 
-def verify_job(lib, key: str, claim: str) -> dict:
+def verify_job(lib, key: str, claim: str, extra: list[str] | None = None) -> dict:
     it = lib.get(key)
     gate(it)
     if not it.has_text:
         raise ValueError(f"{it.key}: no text to check against (`litnav extract {it.key}`)")
-    ps = passages_for(lib, it, claim)
+    ps = passages_for(lib, it, claim, extra=extra)
     body = "\n\n".join(f"[{p['id']}] ({p['section']})\n{p['text']}" for p in ps)
     sha = sha256_file(it.text_path)
     return {"id": f"verify-{it.key}-{_id(claim, sha)}", "kind": "verify", "key": it.key,
@@ -274,8 +312,9 @@ def apply_result(lib, job: dict, res: dict, *, via: str) -> dict:
     out = res.get("output")
     if job["kind"] == "summarize":
         from . import derived
-        if not derived.valid(out):
-            return {"id": job["id"], "status": "failed", "error": "summary did not match the schema"}
+        err = derived.check(it, out)
+        if err:
+            return {"id": job["id"], "status": "failed", "error": err}
         prov = {"model": res.get("model", ""), "via": via, "prompt_version": derived.PROMPT_VERSION,
                 "text_sha256": job["text_sha256"],
                 "text_source": it.meta.get("files", {}).get("text_source", ""),
@@ -290,6 +329,8 @@ def apply_result(lib, job: dict, res: dict, *, via: str) -> dict:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        if job.get("summary_item") and not _record_item_check(it, job, rec):
+            return {"id": job["id"], "status": "stale", "error": "the summary changed since"}
         return {"id": job["id"], "status": "ok", "key": it.key, "record": rec}
     return {"id": job["id"], "status": "failed", "error": f"unknown kind {job['kind']!r}"}
 
