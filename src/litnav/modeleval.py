@@ -144,6 +144,7 @@ def run(lib, eval_path: Path, run_dir: Path, *, limit_minutes: float = 88, log=p
         f"model {model} at {url}; limit {limit_minutes} min")
     (run_dir / "run.json").write_text(json.dumps({
         "started": dt.datetime.now().isoformat(timespec="seconds"), "model": model, "url": url,
+        "via": "local", "model_info": localmodel.model_info(lib),
         "profile": lib.local_model.get("profile"), "eval": str(eval_path), "n_jobs": len(jobs),
         "limit_minutes": limit_minutes}, indent=1))
     start, n = time.time(), 0
@@ -245,7 +246,7 @@ def push(lib, eval_path: Path, *, submit: bool = True, log=print) -> dict:
     return spool.push(lib, jobs, kind="eval", meta={"eval": str(eval_path)}, submit=submit, log=log)
 
 
-def import_batch(lib, b: dict, jobs: dict, fresh: list, *, log=print) -> None:
+def import_batch(lib, b: dict, jobs: dict, fresh: list, *, log=print, server=None) -> None:
     """Write a pulled eval batch's new results in `run`'s format, so `report` scores them."""
     if not fresh:
         return
@@ -265,6 +266,7 @@ def import_batch(lib, b: dict, jobs: dict, fresh: list, *, log=print) -> None:
                                 "output": out, "error": r.get("error", ""), "passages": j["passages"]},
                                ensure_ascii=False) + "\n")
     if not (rd / "run.json").exists():
-        (rd / "run.json").write_text(json.dumps({"batch": True, "eval": b.get("eval"),
-                                                 "model": fresh[0].get("model"), "pushed": b["pushed"]}, indent=1))
+        (rd / "run.json").write_text(json.dumps({"batch": True, "eval": b.get("eval"), "via": "batch",
+                                                 "model": fresh[0].get("model"), "pushed": b["pushed"],
+                                                 "model_info": server}, indent=1))
     log(f"  eval: {len(fresh)} result(s) into {rd}")

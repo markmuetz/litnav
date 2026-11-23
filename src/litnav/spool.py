@@ -183,6 +183,10 @@ def pull(lib, *, log=print) -> dict:
             continue
         if loc != "inbox":
             _rsync(_rpath(cfg, f"{loc}/{bid}/results.jsonl"), str(d / "results.jsonl"))
+            try:
+                _rsync(_rpath(cfg, f"{loc}/{bid}/server.json"), str(d / "server.json"))
+            except RemoteError:
+                pass                       # an older worker
         new = _apply(lib, bid, b, d, log=log) if (d / "results.jsonl").is_file() else 0
         b["state"] = {"inbox": "waiting", "running": "running", "done": "finished"}[loc]
         if loc == "done" and set(b["imported"]) >= set(b["jobs"]) - set(b.get("failed", [])):
@@ -207,9 +211,13 @@ def _apply(lib, bid, b, d, *, log) -> int:
         if r.get("id") in jobs and r["id"] not in done and r.get("ok"):
             fresh.append(r)
             done.add(r["id"])
+    server = json.loads((d / "server.json").read_text()) if (d / "server.json").is_file() else None
     if b["kind"] == "eval":
         from . import modeleval
-        modeleval.import_batch(lib, b, jobs, fresh, log=log)
+        modeleval.import_batch(lib, b, jobs, fresh, log=log, server=server)
+    elif b["kind"] == "paper-eval":
+        from . import papereval
+        papereval.import_batch(lib, b, jobs, fresh, server, log=log)
     else:
         applied = set()
         for r in fresh:

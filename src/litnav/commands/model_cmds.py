@@ -30,6 +30,22 @@ def add(sub):
     p.add_argument("--no-submit", action="store_true", help="push: don't submit the worker job")
     p.set_defaults(func=cmd_eval_model)
 
+    p = sub.add_parser("paper-eval", help="evaluate models at whole-paper tasks (summary, extract) on open "
+                       "papers, judged by Claude: pick, gold, run, push, baseline, judge, report")
+    p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report"])
+    p.add_argument("--eval", default="eval/paper-eval.jsonl")
+    p.add_argument("--task", choices=["summary", "extract"])
+    p.add_argument("--run-dir", help="judge/report: the run folder (default: the newest for --task)")
+    p.add_argument("-n", type=int, default=20, help="pick: how many papers")
+    p.add_argument("--judge-model", default="opus", help="gold/judge: Claude model (claude -p --model)")
+    p.add_argument("--jobs", type=int, default=4, help="gold/judge: Claude calls at a time")
+    p.add_argument("--no-submit", action="store_true")
+    p.set_defaults(func=cmd_paper_eval)
+
+    p = sub.add_parser("evals", help="every recorded eval run (eval/runs.jsonl): task, model, judge, scores")
+    p.add_argument("--task")
+    p.set_defaults(func=cmd_evals)
+
     p = sub.add_parser("models", help="the local model endpoints (profiles) and whether each is up")
     p.set_defaults(func=cmd_models)
 
@@ -289,3 +305,81 @@ def cmd_eval_model(a):
         rep = modeleval.report(lib, ev, rd)
         (rd / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
         print(json.dumps(rep["summary"], indent=1, default=str))
+        from .. import papereval
+        m = json.loads((rd / "run.json").read_text())
+        m.setdefault("task", "verify")
+        m.setdefault("created", m.get("started") or m.get("pushed", ""))
+        m.setdefault("prompt_version", {"verify": localmodel.VERIFY_PROMPT_VERSION, "stepwise": "B"})
+        m["eval"], m["eval_sha256"] = str(ev.relative_to(lib.root)) if ev.is_relative_to(lib.root) else str(ev), \
+            papereval.sha(ev)
+        (rd / "run.json").write_text(json.dumps(m, indent=1))
+        s = rep["summary"]
+        papereval.record(lib, rd, {"by_variant": s["by_variant"], "confusion": s["confusion"],
+                                   "seconds": s["seconds"], "passage_ids_valid": s.get("passage_ids_valid")})
+        _err(f"recorded in {lib.root / 'eval' / 'runs.jsonl'}")
+
+
+def cmd_paper_eval(a):
+    from .. import papereval as P
+    lib = Library.find(a.library)
+    ev = Path(a.eval) if Path(a.eval).is_absolute() else lib.root / a.eval
+    log = _err
+    if a.action == "pick":
+        if ev.exists():
+            raise ValueError(f"{ev} exists: it is the eval set; delete it to pick again")
+        rows = P.pick(lib, a.n)
+        ev.parent.mkdir(parents=True, exist_ok=True)
+        P.save(ev, rows)
+        log(f"picked {len(rows)} open papers into {ev}; next: litnav paper-eval gold")
+        return
+    if a.action == "gold":
+        log(f"wrote key points for {P.gold(lib, ev, model=a.judge_model, jobs=a.jobs, log=log)} paper(s)")
+        return
+    if a.action == "baseline":
+        log(f"existing summaries: {P.baseline(lib, ev)}")
+        return
+    if not a.task and a.action in ("run", "push") or (not a.task and not a.run_dir):
+        raise ValueError("--task summary|extract")
+    if a.action == "run":
+        rd = Path(a.run_dir) if a.run_dir else None
+        log(f"done: {P.run(lib, ev, a.task, rd, log=log)}")
+        return
+    if a.action == "push":
+        m = lib.config.get("batch_remote", {}).get("job_name", "batch")
+        r = P.push(lib, ev, a.task, model_hint="batch", submit=not a.no_submit, log=log)
+        log(f"pushed batch {r['batch']}; `litnav queue pull` brings it back")
+        return
+    rd = Path(a.run_dir) if a.run_dir else max((lib.root / "derived" / "paper-eval").glob(f"{a.task}-*"),
+                                               key=lambda p: p.stat().st_mtime)
+    if a.action == "judge":
+        log(f"judged {P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, log=log)} output(s) in {rd}")
+        return
+    rep = P.report(lib, ev, rd)
+    (rd / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1))
+    print(json.dumps(rep["summary"], indent=1))
+    P.record(lib, rd, rep["summary"])
+    log(f"recorded in {lib.root / 'eval' / 'runs.jsonl'}")
+
+
+def cmd_evals(a):
+    from .. import papereval as P
+    lib = Library.find(a.library)
+    reg = lib.root / "eval" / "runs.jsonl"
+    if not reg.exists():
+        _err("no eval runs recorded yet")
+        return
+    for r in P.load(reg):
+        if a.task and r["task"] != a.task:
+            continue
+        mi = r.get("model_info") or {}
+        where = mi.get("gpus") or mi.get("machine") or ""
+        q = mi.get("quantization_level") or ""
+        s = r["scores"]
+        if r["task"] == "verify":
+            sc = " ".join(f"{v}:{x['ok']}/{x['n']}" for v, x in s["by_variant"].items() if x["n"])
+        else:
+            sc = (f"precision {s.get('precision')} core {s.get('core_coverage')} "
+                  + (f"claims/paper {s.get('claims_per_paper')}" if r["task"] == "extract" else ""))
+        j = (r.get("judge") or {}).get("model", "")
+        print(f"{r['date']} {r['task']:8s} {str(r['model'])[:34]:34s} {q:7s} {where[:22]:22s} {sc}"
+              + (f"  (judge {j})" if j else ""))

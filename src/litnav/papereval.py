@@ -1,0 +1,461 @@
+"""Evaluate models at whole-paper tasks: `litnav paper-eval`.
+
+Two tasks, on one set of open papers (open, so a Claude judge may read them):
+
+  summary   the paper summary litnav writes (derived.SCHEMA: topic, summary,
+            keywords), with the production prompt.
+  extract   the paper's own claims as structured records (hk27's first step):
+            standalone, in the model's own words, with numbers, conditions,
+            how strongly the paper states it, and the passage ids it rests on.
+
+Steps:
+  pick      choose the papers (eval/paper-eval.jsonl)
+  gold      Claude writes each paper's key points once, from the full text:
+            what a good summary or claim list must cover (recorded with the
+            model and prompt that wrote them)
+  run       run a task on [local_model] (or `push` it to the cluster spool;
+            `litnav queue pull` brings it back)
+  baseline  the summaries already in the library, as a run of their own
+  judge     Claude grades each output against the paper and the key points
+  report    scores; every run is recorded in eval/runs.jsonl with its model,
+            server, prompts and judge, so later models can be compared
+
+Run folders (derived/paper-eval/<task>-<date>-<model>/) hold the jobs (paper
+text), raw replies and judgments: git-ignored.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import random
+import re
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from . import batch_runner, derived, localmodel
+from . import sharing as S
+
+PROMPT_VERSION = {"summary": derived.PROMPT_VERSION, "extract": 1, "gold": 1, "judge": 1}
+EVAL_CHARS = 72_000          # the same text for every model: fits Qwen3's 32k tokens with room to think
+JUDGE_CHARS = 160_000
+TASKS = ("summary", "extract")
+
+
+# ---- the papers
+
+def pick(lib, n: int = 20, seed: int = 1, *, min_chars=25_000, max_chars=150_000) -> list[dict]:
+    """Open papers with clean PDF text (not OCR) of ordinary length, chosen at random."""
+    from . import index
+    con = index.connect(lib, readonly=True)
+    try:
+        chunked = {r[0] for r in con.execute("SELECT DISTINCT key FROM chunks")}
+    finally:
+        con.close()
+    pool = []
+    for it in sorted(lib.items(), key=lambda i: i.key):
+        if not (it.allowed(S.SEND_OUT) and it.has_text and it.key in chunked):
+            continue
+        if it.meta.get("files", {}).get("text_source", "").startswith("ocr"):
+            continue
+        size = it.text_path.stat().st_size
+        if min_chars <= size <= max_chars:
+            pool.append({"key": it.key, "title": it.title, "year": it.year, "chars": size})
+    random.Random(seed).shuffle(pool)
+    return sorted(pool[:n], key=lambda p: p["key"])
+
+
+def load(path: Path) -> list[dict]:
+    return [json.loads(l) for l in Path(path).read_text("utf-8").splitlines() if l.strip()]
+
+
+def save(path: Path, rows: list[dict]) -> None:
+    Path(path).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+
+
+# ---- Claude: gold key points and judging (open papers only)
+
+GOLD_SCHEMA = {
+    "type": "object",
+    "properties": {"key_points": {"type": "array", "items": {"type": "object", "properties": {
+        "id": {"type": "string"}, "point": {"type": "string"},
+        "kind": {"type": "string", "enum": ["aim", "method", "data", "finding", "conclusion"]},
+        "core": {"type": "boolean"}}, "required": ["id", "point", "kind", "core"]}}},
+    "required": ["key_points"],
+}
+GOLD_SYSTEM = (
+    "You write the reference for grading model-written summaries and claim lists of an academic paper. "
+    "From the paper's text, list its key points: 6-12 specific statements of what this paper itself does "
+    "and finds (its aims, method and data in brief, and above all its findings and conclusions), with the "
+    "numbers, directions and conditions that matter. Not background from other work. Mark as core the "
+    "3-6 points any good summary must convey. Ids k1, k2, ... In your own words; no quotes.")
+
+
+def _claude(lib, it, system, prompt, schema, model):
+    derived.outbound(lib, [it])                      # open papers only
+    env = derived.run_claude(derived.claude_code_args(model, schema, system=system), prompt)
+    out = env.get("structured_output") or env.get("result")
+    if isinstance(out, str):
+        out = batch_runner.parse_json(out)
+    return out, env.get("modelUsage") and list(env["modelUsage"])[0] or model
+
+
+def gold(lib, eval_path: Path, *, model="opus", jobs=4, log=print) -> int:
+    rows = load(eval_path)
+    todo = [r for r in rows if not r.get("key_points")]
+
+    def one(r):
+        it = lib.get(r["key"])
+        text = it.text()[:JUDGE_CHARS]
+        out, real = _claude(lib, it, GOLD_SYSTEM, f"Paper: {it.title} ({it.year})\n\nText:\n{text}",
+                            GOLD_SCHEMA, model)
+        r["key_points"] = out["key_points"]
+        r["gold"] = {"model": real, "prompt_version": PROMPT_VERSION["gold"],
+                     "date": dt.date.today().isoformat(), "chars_read": len(text)}
+        log(f"gold {r['key']}: {len(r['key_points'])} key points")
+    with ThreadPoolExecutor(jobs) as ex:
+        list(ex.map(one, todo))
+    save(eval_path, rows)
+    return len(todo)
+
+
+# ---- the model jobs
+
+EXTRACT_SYSTEM = (
+    "You extract the claims an academic paper makes, for a database that later checks each claim against "
+    "the paper. You see the paper's text as numbered passages (from the PDF: noisy). List the paper's own "
+    "claims: its findings, conclusions, and the key facts of its method and data. Not background claims "
+    "it cites from other work. 8-25 claims, the most important first.\n"
+    "Each claim: one standalone sentence a reader understands without the paper (name the model, region "
+    "or quantity; no 'it' or 'this study'); in your own words, never copied sentences; keep every number "
+    "with its units, the direction of each effect, and the conditions it holds under (model, region, "
+    "period, resolution). `strength` is how the paper states it: shown (demonstrated by its results), "
+    "suggested (it says may, suggests, likely), or speculated. `passages`: the ids of the passages that "
+    "state it. Reply with JSON only.")
+
+
+def extract_schema(ids: list[str]) -> dict:
+    return {"type": "object", "properties": {"claims": {"type": "array", "maxItems": 30, "items": {
+        "type": "object", "properties": {
+            "claim": {"type": "string"},
+            "kind": {"type": "string", "enum": ["finding", "conclusion", "method", "data"]},
+            "numbers": {"type": "array", "items": {"type": "string"}},
+            "conditions": {"type": "string"},
+            "strength": {"type": "string", "enum": ["shown", "suggested", "speculated"]},
+            "passages": {"type": "array", "maxItems": 4, "items": {"type": "string", "enum": ids}}},
+        "required": ["claim", "kind", "numbers", "conditions", "strength", "passages"],
+        "additionalProperties": False}}}, "required": ["claims"], "additionalProperties": False}
+
+
+def chunks_for(lib, it, limit=EVAL_CHARS) -> list[dict]:
+    from . import index
+    con = index.connect(lib, readonly=True)
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT id, section_title, kind, text FROM chunks WHERE key=? ORDER BY ord", (it.key,))]
+    finally:
+        con.close()
+    out, budget = [], limit
+    for r in rows:
+        if budget <= 0:
+            break
+        t = r["text"][:budget]
+        budget -= len(t) + len(r["id"]) + 8
+        out.append({"id": r["id"], "section": r["section_title"] or r["kind"] or "", "text": t})
+    return out
+
+
+def build_job(lib, key: str, task: str) -> dict:
+    it = lib.get(key)
+    localmodel.gate(it)
+    if task == "summary":
+        j = localmodel.summarize_job(it, limit=EVAL_CHARS)
+        return {"id": f"summary-{key}", "kind": "eval", "task": task, "key": key, "schema": j["schema"],
+                "messages": j["messages"], "chars_sent": j["chars_sent"], "passages": []}
+    ps = chunks_for(lib, it)
+    body = "\n\n".join(f"[{p['id']}] ({p['section']})\n{p['text']}" for p in ps)
+    ids = [p["id"] for p in ps]
+    return {"id": f"extract-{key}", "kind": "eval", "task": task, "key": key, "schema": extract_schema(ids),
+            "messages": [{"role": "system", "content": EXTRACT_SYSTEM},
+                         {"role": "user", "content": f"Paper: {it.title} ({it.year})\n\nPassages:\n{body}"
+                                                     "\n\nReply with JSON only."}],
+            "chars_sent": sum(len(p["text"]) for p in ps), "passages": ids}
+
+
+def default_run_dir(lib, task: str, model: str) -> Path:
+    m = re.sub(r"[^\w.-]+", "-", model.split("/")[-1])
+    return lib.root / "derived" / "paper-eval" / f"{task}-{dt.date.today().isoformat()}-{m}"
+
+
+def write_jobs(lib, eval_path: Path, task: str, run_dir: Path) -> list[dict]:
+    jobs = [build_job(lib, r["key"], task) for r in load(eval_path)]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save(run_dir / "jobs.jsonl", jobs)
+    return jobs
+
+
+def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, log=print) -> Path:
+    url, model, kw = localmodel.endpoint(lib)
+    run_dir = run_dir or default_run_dir(lib, task, model)
+    if not (run_dir / "jobs.jsonl").exists():
+        write_jobs(lib, eval_path, task, run_dir)
+    write_run_meta(run_dir, task=task, eval_path=eval_path, model=model, via="local",
+                   model_info=localmodel.model_info(lib), profile=lib.local_model.get("profile"))
+    batch_runner.run(run_dir / "jobs.jsonl", run_dir / "results.jsonl", url, model, log=log, **kw)
+    return run_dir
+
+
+def push(lib, eval_path: Path, task: str, *, model_hint="batch", submit=True, log=print) -> dict:
+    from . import spool
+    rd = lib.root / "derived" / "paper-eval" / f"{task}-{dt.datetime.now():%Y-%m-%d-%H%M}-{model_hint}"
+    jobs = write_jobs(lib, eval_path, task, rd)
+    write_run_meta(rd, task=task, eval_path=eval_path, model=None, via="batch")
+    return spool.push(lib, jobs, kind="paper-eval", meta={"run_dir": str(rd), "task": task}, submit=submit,
+                      log=log)
+
+
+def import_batch(lib, b: dict, jobs: dict, fresh: list, server: dict | None, *, log=print) -> None:
+    rd = Path(b["run_dir"])
+    with open(rd / "results.jsonl", "a", encoding="utf-8") as f:
+        for r in fresh:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    if fresh:
+        m = json.loads((rd / "run.json").read_text())
+        m["model"] = m.get("model") or fresh[0].get("model")
+        if server:
+            m["model_info"] = server
+        (rd / "run.json").write_text(json.dumps(m, indent=1))
+    log(f"  {b['task']}: {len(fresh)} result(s) into {rd}")
+
+
+def baseline(lib, eval_path: Path, run_dir: Path | None = None) -> Path:
+    """The summaries already in the library, scored like any run."""
+    rd = run_dir or lib.root / "derived" / "paper-eval" / f"summary-{dt.date.today().isoformat()}-existing"
+    rd.mkdir(parents=True, exist_ok=True)
+    res, models = [], Counter()
+    for r in load(eval_path):
+        s = lib.get(r["key"]).summary() or {}
+        p = s.get("provenance", {})
+        models[p.get("model") or p.get("source", "?")] += 1
+        res.append({"id": f"summary-{r['key']}", "ok": bool(s), "model": p.get("model"),
+                    "output": {k: s.get(k) for k in ("topic", "summary", "keywords")}, "provenance": p})
+    save(rd / "results.jsonl", res)
+    save(rd / "jobs.jsonl", [{"id": x["id"], "task": "summary", "key": x["id"][8:], "passages": []} for x in res])
+    write_run_meta(rd, task="summary", eval_path=eval_path, model="existing library summaries",
+                   via="library", model_info={"models": dict(models)})
+    return rd
+
+
+def write_run_meta(rd: Path, **kw) -> None:
+    p = rd / "run.json"
+    m = json.loads(p.read_text()) if p.is_file() else {}
+    eval_path = kw.pop("eval_path", None)
+    if eval_path:
+        kw["eval"] = str(eval_path)
+        kw["eval_sha256"] = sha(eval_path)
+    kw.setdefault("prompt_version", PROMPT_VERSION[kw.get("task", m.get("task"))])
+    kw.setdefault("eval_chars", EVAL_CHARS)
+    m.setdefault("created", dt.datetime.now().isoformat(timespec="seconds"))
+    m.update({k: v for k, v in kw.items() if v is not None or k not in m})
+    rd.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(m, indent=1))
+
+
+# ---- judging
+
+JUDGE_SYSTEM = (
+    "You grade a model's output about an academic paper against the paper itself, for an evaluation. Be "
+    "strict about numbers, units, directions and conditions, and about statements stronger or more "
+    "general than the paper. Judge only from the paper's text given. Reply with the JSON asked for.")
+_VERDICT = {"type": "string"}
+SUMMARY_JUDGE = {"type": "object", "properties": {
+    "statements": {"type": "array", "items": {"type": "object", "properties": {
+        "statement": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["supported", "overstated", "wrong", "unsupported"]},
+        "note": {"type": "string"}}, "required": ["statement", "verdict", "note"]}},
+    "key_points_covered": {"type": "array", "items": {"type": "string"}},
+    "keywords_ok": {"type": "boolean"}}, "required": ["statements", "key_points_covered", "keywords_ok"]}
+EXTRACT_JUDGE = {"type": "object", "properties": {
+    "claims": {"type": "array", "items": {"type": "object", "properties": {
+        "n": {"type": "integer"},
+        "verdict": {"type": "string", "enum": ["correct", "wrong_detail", "overstated", "not_in_paper",
+                                               "background", "trivial"]},
+        "strength_ok": {"type": "boolean"},
+        "standalone": {"type": "boolean"},
+        "note": {"type": "string"}}, "required": ["n", "verdict", "strength_ok", "standalone", "note"]}},
+    "key_points_covered": {"type": "object", "additionalProperties": {"type": "array",
+                                                                       "items": {"type": "integer"}}}},
+    "required": ["claims", "key_points_covered"]}
+
+
+def judge_prompt(task, it, text, kps, out) -> str:
+    kp = "\n".join(f"{k['id']}{' (core)' if k.get('core') else ''}: {k['point']}" for k in kps)
+    head = f"Paper: {it.title} ({it.year})\n\nThe paper's key points (reference):\n{kp}\n\n"
+    if task == "summary":
+        body = (f"Model's summary:\nTopic: {out.get('topic')}\nSummary: {out.get('summary')}\n"
+                f"Keywords: {', '.join(out.get('keywords') or [])}\n\n"
+                "1. Split the topic and summary into their factual statements. Give each a verdict: "
+                "supported (the paper says it), overstated (more certain or general than the paper), wrong "
+                "(a number, direction, method or condition differs), unsupported (not in the paper).\n"
+                "2. key_points_covered: the ids of the key points the summary substantially conveys.\n"
+                "3. keywords_ok: are the keywords topical and lower-case?\n")
+    else:
+        claims = "\n".join(f"{n}. {c.get('claim')} [kind {c.get('kind')}; strength {c.get('strength')}; "
+                           f"conditions: {c.get('conditions') or '-'}]"
+                           for n, c in enumerate(out.get("claims") or [], 1))
+        body = (f"Model's extracted claims:\n{claims}\n\n"
+                "1. For each claim n give a verdict: correct; wrong_detail (a number, unit, direction, method "
+                "or condition differs from the paper); overstated (stronger or more general than the paper); "
+                "not_in_paper; background (true, but a result of other work the paper cites, not this "
+                "paper's); trivial (true but says nothing useful). strength_ok: does its strength (shown / "
+                "suggested / speculated) match how the paper states it? standalone: is it understandable "
+                "without the paper?\n"
+                "2. key_points_covered: for each key point id, the numbers of the claims that convey it "
+                "(an empty list if none).\n")
+    return head + body + f"\nPaper text:\n{text}"
+
+
+def judge(lib, eval_path: Path, run_dir: Path, *, model="opus", jobs=4, log=print) -> int:
+    meta = json.loads((run_dir / "run.json").read_text())
+    task = meta["task"]
+    cases = {r["key"]: r for r in load(eval_path)}
+    jobs_ = {j["id"]: j for j in load(run_dir / "jobs.jsonl")}
+    jpath = run_dir / "judgments.jsonl"
+    have = {r["id"] for r in load(jpath)} if jpath.exists() else set()
+    todo = [r for r in load(run_dir / "results.jsonl") if r.get("ok") and r["id"] not in have
+            and isinstance(r.get("output"), dict)]
+
+    def one(r):
+        key = jobs_[r["id"]]["key"]
+        it = lib.get(key)
+        text = it.text()[:JUDGE_CHARS]
+        try:
+            out, real = _claude(lib, it, JUDGE_SYSTEM, judge_prompt(task, it, text, cases[key]["key_points"],
+                                                                     r["output"]),
+                                SUMMARY_JUDGE if task == "summary" else EXTRACT_JUDGE, model)
+        except Exception as e:                       # noqa: BLE001 - record, go on
+            log(f"judge {r['id']}: {type(e).__name__}: {e}")
+            return None
+        log(f"judged {r['id']}")
+        return {"id": r["id"], "key": key, "judge_model": real, "judge_prompt_version": PROMPT_VERSION["judge"],
+                "judgment": out}
+    with ThreadPoolExecutor(jobs) as ex:
+        done = [x for x in ex.map(one, todo) if x]
+    with open(jpath, "a", encoding="utf-8") as f:
+        for d in done:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    if done:
+        write_run_meta(run_dir, judge={"model": done[0]["judge_model"], "prompt_version": PROMPT_VERSION["judge"]})
+    return len(done)
+
+
+# ---- scoring
+
+def copied_run(out_text: str, paper_words: set, n: int = 6) -> int:
+    """Longest run of words copied from the paper (0 if under n)."""
+    w = re.findall(r"[a-z0-9]+", out_text.lower())
+    best = run = 0
+    for i in range(len(w) - n + 1):
+        if " ".join(w[i:i + n]) in paper_words:
+            run = run + 1 if run else n
+            best = max(best, run)
+        else:
+            run = 0
+    return best
+
+
+def _ngrams(text, n=6):
+    w = re.findall(r"[a-z0-9]+", text.lower())
+    return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+
+
+def report(lib, eval_path: Path, run_dir: Path) -> dict:
+    meta = json.loads((run_dir / "run.json").read_text())
+    task = meta["task"]
+    cases = {r["key"]: r for r in load(eval_path)}
+    jobs = {j["id"]: j for j in load(run_dir / "jobs.jsonl")}
+    res = {r["id"]: r for r in load(run_dir / "results.jsonl")}
+    jud = {r["id"]: r["judgment"] for r in load(run_dir / "judgments.jsonl")} \
+        if (run_dir / "judgments.jsonl").exists() else {}
+    rows = []
+    for jid, j in jobs.items():
+        key = j["key"]
+        r = res.get(jid, {})
+        out = r.get("output") if isinstance(r.get("output"), dict) else None
+        kps = cases[key].get("key_points", [])
+        core = {k["id"] for k in kps if k.get("core")}
+        row = {"id": jid, "key": key, "ok": out is not None, "seconds": r.get("seconds"), "judged": jid in jud}
+        if out is not None:
+            grams = _ngrams(lib.get(key).text())
+            if task == "summary":
+                row["copied_run"] = copied_run(f"{out.get('topic', '')} {out.get('summary', '')}", grams)
+                row["sentences"] = len(re.findall(r"[.!?](\s|$)", out.get("summary") or ""))
+            else:
+                cl = out.get("claims") or []
+                row["claims"] = len(cl)
+                runs = [copied_run(c.get("claim", ""), grams) for c in cl]
+                row["copied_run"] = max(runs, default=0)
+                row["copied_12"] = sum(x >= 12 for x in runs)
+                row["passages_valid"] = sum(bool(c.get("passages")) and all(p in j["passages"] for p in c["passages"])
+                                            for c in cl)
+        jd = jud.get(jid)
+        if jd:
+            cov = jd.get("key_points_covered")
+            covered = set(cov) if isinstance(cov, list) else {k for k, v in (cov or {}).items() if v}
+            row["core_covered"] = len(covered & core)
+            row["core"] = len(core)
+            row["kp_covered"] = len(covered & {k["id"] for k in kps})
+            row["kp"] = len(kps)
+            items = jd.get("statements") if task == "summary" else jd.get("claims")
+            row["verdicts"] = dict(Counter(x.get("verdict") for x in items or []))
+            if task == "extract":
+                row["strength_ok"] = sum(bool(x.get("strength_ok")) for x in items or [])
+                row["standalone"] = sum(bool(x.get("standalone")) for x in items or [])
+        rows.append(row)
+    return {"meta": meta, "rows": rows, "summary": summarize(task, rows)}
+
+
+def summarize(task, rows) -> dict:
+    j = [r for r in rows if r.get("judged")]
+    v = Counter()
+    for r in j:
+        v.update(r["verdicts"])
+    n_items = sum(v.values())
+    good = "supported" if task == "summary" else "correct"
+    s = {"papers": len(rows), "outputs": sum(r["ok"] for r in rows), "judged": len(j),
+         "verdicts": dict(v), "precision": round(v[good] / n_items, 3) if n_items else None,
+         "core_coverage": round(sum(r["core_covered"] for r in j) / max(1, sum(r["core"] for r in j)), 3) if j else None,
+         "kp_coverage": round(sum(r["kp_covered"] for r in j) / max(1, sum(r["kp"] for r in j)), 3) if j else None,
+         "copied_run_max": max((r.get("copied_run", 0) for r in rows if r["ok"]), default=0),
+         "median_seconds": sorted(r["seconds"] for r in rows if r.get("seconds"))[len([r for r in rows if r.get("seconds")]) // 2]
+         if any(r.get("seconds") for r in rows) else None}
+    if task == "extract":
+        n = sum(r.get("claims", 0) for r in rows)
+        s.update({"claims": n, "claims_per_paper": round(n / max(1, s["outputs"]), 1),
+                  "copied_12": sum(r.get("copied_12", 0) for r in rows),
+                  "passages_valid": round(sum(r.get("passages_valid", 0) for r in rows) / max(1, n), 3),
+                  "strength_ok": round(sum(r.get("strength_ok", 0) for r in j) / max(1, n_items), 3) if j else None,
+                  "standalone": round(sum(r.get("standalone", 0) for r in j) / max(1, n_items), 3) if j else None})
+    return s
+
+
+# ---- the registry of runs (eval/runs.jsonl, tracked): every task, model and judge
+
+def record(lib, run_dir: Path, scores: dict, *, registry: Path | None = None) -> Path:
+    reg = registry or lib.root / "eval" / "runs.jsonl"
+    meta = json.loads((run_dir / "run.json").read_text())
+    rel = str(run_dir.relative_to(lib.root)) if run_dir.is_relative_to(lib.root) else str(run_dir)
+    row = {"run": rel, "task": meta.get("task"), "eval": meta.get("eval"), "eval_sha256": meta.get("eval_sha256"),
+           "date": meta.get("created", "")[:10], "model": meta.get("model"), "via": meta.get("via"),
+           "model_info": meta.get("model_info"), "prompt_version": meta.get("prompt_version"),
+           "judge": meta.get("judge"), "scores": scores}
+    rows = [r for r in load(reg) if r["run"] != rel] if reg.exists() else []
+    rows.append(row)
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    save(reg, rows)
+    return reg

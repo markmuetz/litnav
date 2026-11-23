@@ -139,6 +139,41 @@ def ping(cfg: dict, timeout: float = 5) -> str:
                                                                   f" (not {cfg.get('model')}!)")
 
 
+def model_info(lib, timeout: float = 10) -> dict:
+    """What the server says about the model (for eval and summary metadata):
+    Ollama's family, size and quantization, or vLLM's context and weights."""
+    import socket
+    import urllib.parse
+    import urllib.request
+    url, model, kw = endpoint(lib)
+    info = {"model": model, "profile": lib.local_model.get("profile") or "default"}
+    host = urllib.parse.urlparse(url).hostname or ""
+    info["machine"] = socket.gethostname().split(".")[0] if host in ("localhost", "127.0.0.1") else host
+    hdr = {"Authorization": f"Bearer {kw['api_key']}"} if kw.get("api_key") else {}
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url.rstrip("/") + "/models", headers=hdr),
+                                    timeout=timeout) as r:
+            for m in json.load(r).get("data", []):
+                if m.get("id") == model:
+                    info.update({k: m[k] for k in ("max_model_len", "root", "owned_by") if k in m})
+    except Exception as e:                       # noqa: BLE001
+        info["models_error"] = f"{type(e).__name__}"
+    base = url.rstrip("/")
+    base = base[:-3] if base.endswith("/v1") else base
+    try:
+        req = urllib.request.Request(base + "/api/show", data=json.dumps({"model": model}).encode(),
+                                     headers={"Content-Type": "application/json", **hdr}, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.load(r)
+        info["server"] = "ollama"
+        info.update({k: v for k, v in (d.get("details") or {}).items()
+                     if k in ("family", "parameter_size", "quantization_level", "format")})
+        info["digest"] = (d.get("digest") or "")[:12] or None
+    except Exception:                            # noqa: BLE001 - not Ollama
+        info.setdefault("server", "openai-compatible")
+    return {k: v for k, v in info.items() if v is not None}
+
+
 # ---- jobs
 
 # A local model's context is far smaller than Claude's: Qwen3 has 32k tokens,

@@ -54,9 +54,40 @@ def write_status(spool: Path, **kw) -> None:
     tmp.replace(spool / "status.json")
 
 
+def server_info(url: str, model: str, api_key: str = "") -> dict:
+    """What served the batch: the model as the server reports it, the node and its GPUs."""
+    import subprocess
+    import urllib.request
+    info = {"model": model, "machine": socket.gethostname().split(".")[0],
+            "job": os.environ.get("SLURM_JOB_ID", ""), "server": "openai-compatible"}
+    try:
+        req = urllib.request.Request(url.rstrip("/") + "/models",
+                                     headers={"Authorization": f"Bearer {api_key}"} if api_key else {})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            for m in json.load(r).get("data", []):
+                if m.get("id") == model:
+                    info.update({k: m[k] for k in ("max_model_len", "root", "owned_by") if k in m})
+                    info["server"] = "vllm" if m.get("owned_by") == "vllm" else info["server"]
+    except Exception as e:                       # noqa: BLE001
+        info["models_error"] = type(e).__name__
+    try:
+        g = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                           capture_output=True, text=True, timeout=20).stdout.split("\n")
+        g = [x.strip() for x in g if x.strip()]
+        if g:
+            info["gpus"] = f"{len(g)} x {g[0]}"
+    except Exception:                            # noqa: BLE001
+        pass
+    for k in ("LLM_MAX_NUM_SEQS", "LLM_MAX_LEN"):
+        if os.environ.get(k):
+            info[k.lower()] = os.environ[k]
+    return info
+
+
 def work(spool: Path, url: str, model: str, *, limit_s: float | None, concurrency: int,
          log=print, **kw) -> int:
     t0 = time.time()
+    server = dict(server_info(url, model, kw.get("api_key", "")), concurrency=concurrency)
     for sub in ("running", "done"):
         (spool / sub).mkdir(parents=True, exist_ok=True)
     while True:
@@ -74,6 +105,7 @@ def work(spool: Path, url: str, model: str, *, limit_s: float | None, concurrenc
         if left_s is not None and left_s <= 0:
             write_status(spool, state="stopped", model=model, note="time limit; work left")
             return 3
+        (b / "server.json").write_text(json.dumps(server, indent=1))
         n_jobs = sum(1 for l in (b / "jobs.jsonl").read_text("utf-8").splitlines() if l.strip())
         write_status(spool, state="running", batch=b.name, jobs=n_jobs, model=model,
                      started=dt.datetime.now().isoformat(timespec="seconds"))
