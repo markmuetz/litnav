@@ -37,14 +37,15 @@ def add(sub):
     p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report", "compare"],
                    help="compare: --run-dir A --against B, item by item")
     p.add_argument("--eval", default="eval/paper-eval.jsonl")
-    p.add_argument("--task", choices=["summary", "extract"])
+    p.add_argument("--task", choices=["summary", "extract", "mentions"])
     p.add_argument("--run-dir", help="judge/report: the run folder (default: the newest for --task)")
     p.add_argument("-n", type=int, default=20, help="pick: how many papers")
     p.add_argument("--judge-model", default="opus", help="gold/judge: Claude model (claude -p --model)")
     p.add_argument("--jobs", type=int, default=4, help="gold/judge: Claude calls at a time")
     p.add_argument("--no-submit", action="store_true")
     p.add_argument("--chars", type=int, help="run/push: characters of each paper the model reads "
-                   "(default 72000, the pilot's; 0 = the whole paper). Fixed per run, recorded in run.json")
+                   "(default 72000, the pilot's; 0 = the whole paper); for mentions, the characters per call "
+                   "(default 20000; the whole paper is read). Fixed per run, recorded in run.json")
     p.add_argument("--against", help="compare: the second run folder")
     p.set_defaults(func=cmd_paper_eval)
 

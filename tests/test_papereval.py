@@ -21,6 +21,13 @@ def fake_claude(monkeypatch, seen):
             out = {"statements": [{"statement": "a", "verdict": "supported", "note": ""},
                                   {"statement": "b", "verdict": "wrong", "note": "sign"}],
                    "key_points_covered": ["k1"], "keywords_ok": True}
+        elif "claim_type" in schema["properties"]["claims"]["items"]["properties"]:
+            out = {"claims": [{"n": 1, "verdict": "correct", "claim_type": "restated", "evidence_type": "theory",
+                               "hedging": "strong", "standalone": True, "note": ""},
+                              {"n": 2, "verdict": "wrong_detail", "claim_type": "shown",
+                               "evidence_type": "observations", "hedging": "moderate", "standalone": False,
+                               "note": ""}],
+                   "key_points_covered": {"k1": [2], "k2": []}}
         else:
             out = {"claims": [{"n": 1, "verdict": "correct", "strength_ok": True, "standalone": True, "note": ""}],
                    "key_points_covered": {"k1": [1], "k2": []}}
@@ -130,3 +137,64 @@ def test_record_keeps_hand_added_model_info(tmp_path, ilib):
     P.record(ilib, rd, {"x": 1}, registry=reg)
     (r,) = P.load(reg)
     assert r["model_info"] == {"gpus": "8"} and r["model"] == "m" and r["scores"] == {"x": 1}
+
+
+def test_mentions_task(ilib, tmp_path, monkeypatch):
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [
+        {"id": "k1", "point": "p", "kind": "finding", "core": True},
+        {"id": "k2", "point": "q", "kind": "data", "core": False}]}])
+    calls = []
+
+    def reply(messages):
+        calls.append(messages)
+        lines = messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
+        ids = [l[1:].split("]")[0] for l in lines if l.startswith("[")]
+        text = lines[1]
+        m = {"statement": "Gravity waves radiate from squall lines.", "chunk": ids[0], "quote": text[:30],
+             "source": "text", "claim_type": "shown", "evidence_type": "theory",
+             "experiment": {"model": "", "resolution": "", "method": ""},
+             "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
+             "hedging": "strong", "hedge_words": "", "value": {"value": "", "units": "", "low": "", "high": ""}}
+        return {"mentions": [m, {**m, "quote": "words that are not there", "claim_type": "shown"}]}
+    FakeModel(monkeypatch, reply)
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "mentions", tmp_path / "m", chars=300, log=lambda m: None)
+    jobs = P.load(rd / "jobs.jsonl")
+    assert len(jobs) == len(calls) >= 2                     # the paper in several calls, by section
+    assert all("Abstract:" in c[1]["content"] or "Opening (no abstract" in c[1]["content"] for c in calls)
+    assert json.loads((rd / "run.json").read_text())["eval_chars"] == 300
+    assert P.judge(lib, ev, rd, log=lambda m: None) == 1      # one judgment for the paper
+    s = P.report(lib, ev, rd)["summary"]
+    assert s["claims"] == 2 * len(jobs) and s["claims_per_paper"] == 2 * len(jobs)
+    assert s["grounded"] == 0.5
+    assert s["claim_type_accuracy"] == 0.5 and s["restated_as_shown"] == 1 and s["restated_total"] == 1
+    assert s["claim_type_confusion"] == {"restated->shown": 1}
+    assert s["hedging_accuracy"] == 0.5 and s["core_coverage"] == 1.0
+
+
+def test_mention_groups_and_records():
+    from litnav import claims as C
+    rows = [{"id": "a1", "section": "1", "kind": "abstract", "text": "x" * 50},
+            {"id": "f", "section": "0", "kind": "front", "text": "title"},
+            {"id": "b1", "section": "2", "kind": "body", "text": "y" * 60},
+            {"id": "b2", "section": "2", "kind": "body", "text": "y" * 60},
+            {"id": "c1", "section": "3", "kind": "body", "text": "z" * 30},
+            {"id": "k", "section": "4", "kind": "ack", "text": "thanks"}]
+    g = C.groups(rows, budget=100)
+    assert [[r["id"] for r in x] for x in g] == [["a1"], ["b1"], ["b2", "c1"]]
+    assert [[r["id"] for r in x] for x in C.groups(rows, budget=10_000)] == [["a1", "b1", "b2", "c1"]]
+    m = {"statement": "s", "chunk": "b1", "quote": "q", "source": "figure", "claim_type": "restated",
+         "evidence_type": "km_scale", "experiment": {}, "conditions": {"region": "Sahel"}, "hedging": "weak",
+         "hedge_words": "may", "value": {"value": "1,200", "units": "m", "low": "", "high": "1500"}}
+    recs, quotes = C.records("k", [{"mentions": [m]}, None], {"b1": {"section_title": "Results", "page": 3}})
+    (r,) = recs
+    assert r["id"].startswith("m_") and "quote" not in r and quotes[0]["mention"] == r["id"]
+    assert r["value"] == {"value": 1200.0, "as_written": "1,200", "units": "m", "low": None, "high": 1500.0}
+    assert r["hedging"] == {"level": "weak", "words": "may"} and r["section"] == "Results" and r["page"] == 3
+    assert C._value({"value": "", "units": "", "low": "", "high": ""}) is None
+    assert C.grounded("radiate from squall-\nlines", "Waves RADIATE   from squall-\n lines here")
+    assert not C.grounded("", "anything")
