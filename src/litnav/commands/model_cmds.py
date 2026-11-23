@@ -28,11 +28,14 @@ def add(sub):
     p.add_argument("--run-dir", help="default derived/model-eval/<date>-<model>")
     p.add_argument("--limit-minutes", type=float, default=88)
     p.add_argument("--no-submit", action="store_true", help="push: don't submit the worker job")
+    p.add_argument("--against", help="report: another run folder on the same set, compared claim by claim "
+                   "(McNemar's test)")
     p.set_defaults(func=cmd_eval_model)
 
     p = sub.add_parser("paper-eval", help="evaluate models at whole-paper tasks (summary, extract) on open "
                        "papers, judged by Claude: pick, gold, run, push, baseline, judge, report")
-    p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report"])
+    p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report", "compare"],
+                   help="compare: --run-dir A --against B, item by item")
     p.add_argument("--eval", default="eval/paper-eval.jsonl")
     p.add_argument("--task", choices=["summary", "extract"])
     p.add_argument("--run-dir", help="judge/report: the run folder (default: the newest for --task)")
@@ -40,6 +43,9 @@ def add(sub):
     p.add_argument("--judge-model", default="opus", help="gold/judge: Claude model (claude -p --model)")
     p.add_argument("--jobs", type=int, default=4, help="gold/judge: Claude calls at a time")
     p.add_argument("--no-submit", action="store_true")
+    p.add_argument("--chars", type=int, help="run/push: characters of each paper the model reads "
+                   "(default 72000, the pilot's; 0 = the whole paper). Fixed per run, recorded in run.json")
+    p.add_argument("--against", help="compare: the second run folder")
     p.set_defaults(func=cmd_paper_eval)
 
     p = sub.add_parser("evals", help="every recorded eval run (eval/runs.jsonl): task, model, judge, scores")
@@ -303,6 +309,9 @@ def cmd_eval_model(a):
         print(json.dumps(r))
     else:
         rep = modeleval.report(lib, ev, rd)
+        if a.against:
+            other = modeleval.report(lib, ev, Path(a.against))
+            rep["summary"]["compare"] = {"against": a.against, **modeleval.compare(rep["rows"], other["rows"])}
         (rd / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str))
         print(json.dumps(rep["summary"], indent=1, default=str))
         from .. import papereval
@@ -342,15 +351,24 @@ def cmd_paper_eval(a):
         raise ValueError("--task summary|extract")
     if a.action == "run":
         rd = Path(a.run_dir) if a.run_dir else None
-        log(f"done: {P.run(lib, ev, a.task, rd, log=log)}")
+        log(f"done: {P.run(lib, ev, a.task, rd, chars=a.chars, log=log)}")
         return
     if a.action == "push":
         m = lib.config.get("batch_remote", {}).get("job_name", "batch")
-        r = P.push(lib, ev, a.task, model_hint="batch", submit=not a.no_submit, log=log)
+        r = P.push(lib, ev, a.task, model_hint="batch", chars=a.chars, submit=not a.no_submit, log=log)
         log(f"pushed batch {r['batch']}; `litnav queue pull` brings it back")
         return
     rd = Path(a.run_dir) if a.run_dir else max((lib.root / "derived" / "paper-eval").glob(f"{a.task}-*"),
                                                key=lambda p: p.stat().st_mtime)
+    if a.action == "compare":
+        if not (a.run_dir and a.against):
+            raise ValueError("compare: --run-dir A --against B")
+        ra, rb = P.report(lib, ev, rd), P.report(lib, ev, Path(a.against))
+        if ra["meta"]["task"] != rb["meta"]["task"]:
+            raise ValueError("compare: the two runs are different tasks")
+        out = {"a": str(rd), "b": a.against, **P.compare(ra["meta"]["task"], ra["rows"], rb["rows"])}
+        print(json.dumps(out, indent=1))
+        return
     if a.action == "judge":
         log(f"judged {P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, log=log)} output(s) in {rd}")
         return

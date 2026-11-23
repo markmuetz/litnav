@@ -81,3 +81,52 @@ def test_copied_run():
     grams = P._ngrams("one two three four five six seven eight nine ten")
     assert P.copied_run("x one two three four five six seven y", grams) == 7
     assert P.copied_run("one two three four five", grams) == 0
+
+
+def test_chars_is_a_run_setting(ilib, tmp_path, monkeypatch):
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [{"id": "k1", "point": "p", "kind": "finding",
+                                                            "core": True}]}])
+    FakeModel(monkeypatch, lambda m: {"claims": []})
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    whole = len(lib.get("jones2019gravity").text())
+    rd = P.run(lib, ev, "extract", tmp_path / "whole", chars=0, log=lambda m: None)
+    job = P.load(rd / "jobs.jsonl")[0]
+    assert json.loads((rd / "run.json").read_text())["eval_chars"] == 0
+    assert job["chars_sent"] >= whole * 0.9                         # the whole paper, as passages
+    rd2 = P.run(lib, ev, "extract", tmp_path / "short", chars=200, log=lambda m: None)
+    assert P.load(rd2 / "jobs.jsonl")[0]["chars_sent"] <= 200
+    P.run(lib, ev, "extract", rd2, log=lambda m: None)              # resuming keeps it
+    assert json.loads((rd2 / "run.json").read_text())["eval_chars"] == 200
+    with pytest.raises(ValueError):
+        P.run(lib, ev, "extract", rd2, chars=0, log=lambda m: None)
+    rep = P.report(lib, ev, rd2)
+    assert rep["rows"][0]["paper_chars"] == whole
+    assert set(rep["summary"]["by_length"]) == {"<=72k", ">72k"}
+    assert rep["summary"]["by_length"]["<=72k"]["papers"] == 1
+
+
+def test_compare_runs_item_by_item():
+    def row(key, hits, good, bad):
+        return {"key": key, "judged": True, "core_hits": hits, "kp_hits": hits, "_core_ids": ["k1", "k2"],
+                "_all_ids": ["k1", "k2"], "verdicts": {"correct": good, "wrong": bad}}
+    a = [row("p1", ["k1", "k2"], 4, 0), row("p2", ["k1"], 3, 1)]
+    b = [row("p1", ["k1"], 2, 2), row("p2", [], 2, 2)]
+    c = P.compare("extract", a, b)
+    k = c["key_points_core"]
+    assert (k["n"], k["a"], k["b"], k["a_only"], k["b_only"]) == (4, 3, 1, 2, 0)
+    assert k["a_only_ids"] == ["p1:k2", "p2:k1"]
+    assert c["precision_diff"]["diff"] == round(7 / 8 - 4 / 8, 3)
+
+
+def test_record_keeps_hand_added_model_info(tmp_path, ilib):
+    rd = tmp_path / "run"
+    rd.mkdir()
+    (rd / "run.json").write_text(json.dumps({"task": "verify", "created": "2026-11-22"}))
+    reg = tmp_path / "runs.jsonl"
+    P.save(reg, [{"run": str(rd), "model": "m", "model_info": {"gpus": "8"}, "scores": {}}])
+    P.record(ilib, rd, {"x": 1}, registry=reg)
+    (r,) = P.load(reg)
+    assert r["model_info"] == {"gpus": "8"} and r["model"] == "m" and r["scores"] == {"x": 1}

@@ -34,11 +34,13 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import batch_runner, derived, localmodel
+from . import batch_runner, derived, evalstats, localmodel
 from . import sharing as S
 
 PROMPT_VERSION = {"summary": derived.PROMPT_VERSION, "extract": 1, "gold": 1, "judge": 1}
-EVAL_CHARS = 72_000          # the same text for every model: fits Qwen3's 32k tokens with room to think
+EVAL_CHARS = 72_000          # the pilot's limit: the same text for every model, fits Qwen3's 32k tokens
+                             # with room to think. A run can set its own (`--chars`; 0 = the whole paper)
+LONG_PAPER = 72_000          # report splits scores at this paper length (the pilot's cut-off)
 JUDGE_CHARS = 160_000
 TASKS = ("summary", "extract")
 
@@ -152,7 +154,8 @@ def extract_schema(ids: list[str]) -> dict:
         "additionalProperties": False}}}, "required": ["claims"], "additionalProperties": False}
 
 
-def chunks_for(lib, it, limit=EVAL_CHARS) -> list[dict]:
+def chunks_for(lib, it, limit: int | None = EVAL_CHARS) -> list[dict]:
+    """The paper's passages in order, within `limit` characters (0 or None: all of them)."""
     from . import index
     con = index.connect(lib, readonly=True)
     try:
@@ -160,24 +163,24 @@ def chunks_for(lib, it, limit=EVAL_CHARS) -> list[dict]:
             "SELECT id, section_title, kind, text FROM chunks WHERE key=? ORDER BY ord", (it.key,))]
     finally:
         con.close()
-    out, budget = [], limit
+    out, budget = [], limit or float("inf")
     for r in rows:
         if budget <= 0:
             break
-        t = r["text"][:budget]
+        t = r["text"] if budget == float("inf") else r["text"][:int(budget)]
         budget -= len(t) + len(r["id"]) + 8
         out.append({"id": r["id"], "section": r["section_title"] or r["kind"] or "", "text": t})
     return out
 
 
-def build_job(lib, key: str, task: str) -> dict:
+def build_job(lib, key: str, task: str, chars: int | None = EVAL_CHARS) -> dict:
     it = lib.get(key)
     localmodel.gate(it)
     if task == "summary":
-        j = localmodel.summarize_job(it, limit=EVAL_CHARS)
+        j = localmodel.summarize_job(it, limit=chars or 10 ** 9)
         return {"id": f"summary-{key}", "kind": "eval", "task": task, "key": key, "schema": j["schema"],
                 "messages": j["messages"], "chars_sent": j["chars_sent"], "passages": []}
-    ps = chunks_for(lib, it)
+    ps = chunks_for(lib, it, chars)
     body = "\n\n".join(f"[{p['id']}] ({p['section']})\n{p['text']}" for p in ps)
     ids = [p["id"] for p in ps]
     return {"id": f"extract-{key}", "kind": "eval", "task": task, "key": key, "schema": extract_schema(ids),
@@ -192,29 +195,46 @@ def default_run_dir(lib, task: str, model: str) -> Path:
     return lib.root / "derived" / "paper-eval" / f"{task}-{dt.date.today().isoformat()}-{m}"
 
 
-def write_jobs(lib, eval_path: Path, task: str, run_dir: Path) -> list[dict]:
-    jobs = [build_job(lib, r["key"], task) for r in load(eval_path)]
+def write_jobs(lib, eval_path: Path, task: str, run_dir: Path, chars: int | None = EVAL_CHARS) -> list[dict]:
+    jobs = [build_job(lib, r["key"], task, chars) for r in load(eval_path)]
     run_dir.mkdir(parents=True, exist_ok=True)
     save(run_dir / "jobs.jsonl", jobs)
     return jobs
 
 
-def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, log=print) -> Path:
+def _chars_for_run(run_dir: Path, chars: int | None) -> int | None:
+    """A run's character limit is fixed when its jobs are written: resuming
+    keeps it, and asking for a different one is an error."""
+    p = run_dir / "run.json"
+    if (run_dir / "jobs.jsonl").exists() and p.is_file():
+        had = json.loads(p.read_text()).get("eval_chars", EVAL_CHARS)
+        if chars is not None and chars != had:
+            raise ValueError(f"{run_dir} was written with --chars {had}; use a new --run-dir for {chars}")
+        return had
+    return EVAL_CHARS if chars is None else chars
+
+
+def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, chars: int | None = None,
+        log=print) -> Path:
+    """chars: characters of each paper the model reads (default EVAL_CHARS; 0 = the whole paper)."""
     url, model, kw = localmodel.endpoint(lib)
     run_dir = run_dir or default_run_dir(lib, task, model)
+    chars = _chars_for_run(run_dir, chars)
     if not (run_dir / "jobs.jsonl").exists():
-        write_jobs(lib, eval_path, task, run_dir)
-    write_run_meta(run_dir, task=task, eval_path=eval_path, model=model, via="local",
+        write_jobs(lib, eval_path, task, run_dir, chars)
+    write_run_meta(run_dir, task=task, eval_path=eval_path, model=model, via="local", eval_chars=chars,
                    model_info=localmodel.model_info(lib), profile=lib.local_model.get("profile"))
     batch_runner.run(run_dir / "jobs.jsonl", run_dir / "results.jsonl", url, model, log=log, **kw)
     return run_dir
 
 
-def push(lib, eval_path: Path, task: str, *, model_hint="batch", submit=True, log=print) -> dict:
+def push(lib, eval_path: Path, task: str, *, model_hint="batch", chars: int | None = None, submit=True,
+         log=print) -> dict:
     from . import spool
+    chars = EVAL_CHARS if chars is None else chars
     rd = lib.root / "derived" / "paper-eval" / f"{task}-{dt.datetime.now():%Y-%m-%d-%H%M}-{model_hint}"
-    jobs = write_jobs(lib, eval_path, task, rd)
-    write_run_meta(rd, task=task, eval_path=eval_path, model=None, via="batch")
+    jobs = write_jobs(lib, eval_path, task, rd, chars)
+    write_run_meta(rd, task=task, eval_path=eval_path, model=None, via="batch", eval_chars=chars)
     return spool.push(lib, jobs, kind="paper-eval", meta={"run_dir": str(rd), "task": task}, submit=submit,
                       log=log)
 
@@ -389,9 +409,11 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
         out = r.get("output") if isinstance(r.get("output"), dict) else None
         kps = cases[key].get("key_points", [])
         core = {k["id"] for k in kps if k.get("core")}
-        row = {"id": jid, "key": key, "ok": out is not None, "seconds": r.get("seconds"), "judged": jid in jud}
+        text = lib.get(key).text()
+        row = {"id": jid, "key": key, "ok": out is not None, "seconds": r.get("seconds"), "judged": jid in jud,
+               "paper_chars": len(text), "chars_sent": j.get("chars_sent")}
         if out is not None:
-            grams = _ngrams(lib.get(key).text())
+            grams = _ngrams(text)
             if task == "summary":
                 row["copied_run"] = copied_run(f"{out.get('topic', '')} {out.get('summary', '')}", grams)
                 row["sentences"] = len(re.findall(r"[.!?](\s|$)", out.get("summary") or ""))
@@ -407,17 +429,60 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
         if jd:
             cov = jd.get("key_points_covered")
             covered = set(cov) if isinstance(cov, list) else {k for k, v in (cov or {}).items() if v}
+            row["core_hits"] = sorted(covered & core)
+            row["kp_hits"] = sorted(covered & {k["id"] for k in kps})
             row["core_covered"] = len(covered & core)
             row["core"] = len(core)
             row["kp_covered"] = len(covered & {k["id"] for k in kps})
             row["kp"] = len(kps)
+            row["_core_ids"] = sorted(core)
+            row["_all_ids"] = sorted(k["id"] for k in kps)
             items = jd.get("statements") if task == "summary" else jd.get("claims")
             row["verdicts"] = dict(Counter(x.get("verdict") for x in items or []))
             if task == "extract":
                 row["strength_ok"] = sum(bool(x.get("strength_ok")) for x in items or [])
                 row["standalone"] = sum(bool(x.get("standalone")) for x in items or [])
         rows.append(row)
-    return {"meta": meta, "rows": rows, "summary": summarize(task, rows)}
+    s = summarize(task, rows)
+    s["by_length"] = {f"<={LONG_PAPER // 1000}k": _brief(task, [r for r in rows if r["paper_chars"] <= LONG_PAPER]),
+                      f">{LONG_PAPER // 1000}k": _brief(task, [r for r in rows if r["paper_chars"] > LONG_PAPER])}
+    return {"meta": meta, "rows": rows, "summary": s}
+
+
+def _brief(task, rows) -> dict:
+    s = summarize(task, rows)
+    return {k: s.get(k) for k in ("papers", "judged", "precision", "precision_ci", "core_coverage",
+                                  "core_coverage_ci")}
+
+
+def _good(task) -> str:
+    return "supported" if task == "summary" else "correct"
+
+
+def compare(task: str, a_rows: list[dict], b_rows: list[dict]) -> dict:
+    """Two runs on the same papers, item by item: McNemar on the key points
+    each covers, and a paired bootstrap (over papers) of the precision gap."""
+    def hits(rows, field, total):
+        out = {}
+        for r in rows:
+            if r.get("judged"):
+                got = set(r.get(field, []))
+                for k in r.get(f"_{total}", []):
+                    out[(r["key"], k)] = k in got
+        return out
+
+    def prec(rows):
+        g = _good(task)
+        return {r["key"]: (r["verdicts"].get(g, 0), sum(r["verdicts"].values())) for r in rows if r.get("judged")}
+    res = {}
+    for name, field in (("core", "core_hits"), ("all", "kp_hits")):
+        pa, pb = hits(a_rows, field, name + "_ids"), hits(b_rows, field, name + "_ids")
+        p = evalstats.paired(pa, pb)
+        p["a_only_ids"] = [f"{k}:{i}" for k, i in p["a_only_ids"]]
+        p["b_only_ids"] = [f"{k}:{i}" for k, i in p["b_only_ids"]]
+        res[f"key_points_{name}"] = p
+    res["precision_diff"] = evalstats.bootstrap_diff(prec(a_rows), prec(b_rows))
+    return res
 
 
 def summarize(task, rows) -> dict:
@@ -434,6 +499,9 @@ def summarize(task, rows) -> dict:
          "copied_run_max": max((r.get("copied_run", 0) for r in rows if r["ok"]), default=0),
          "median_seconds": sorted(r["seconds"] for r in rows if r.get("seconds"))[len([r for r in rows if r.get("seconds")]) // 2]
          if any(r.get("seconds") for r in rows) else None}
+    s["precision_ci"] = evalstats.bootstrap_ratio(
+        [(r["verdicts"].get(good, 0), sum(r["verdicts"].values())) for r in j])
+    s["core_coverage_ci"] = evalstats.bootstrap_ratio([(r["core_covered"], r["core"]) for r in j])
     if task == "extract":
         n = sum(r.get("claims", 0) for r in rows)
         s.update({"claims": n, "claims_per_paper": round(n / max(1, s["outputs"]), 1),
@@ -454,7 +522,11 @@ def record(lib, run_dir: Path, scores: dict, *, registry: Path | None = None) ->
            "date": meta.get("created", "")[:10], "model": meta.get("model"), "via": meta.get("via"),
            "model_info": meta.get("model_info"), "prompt_version": meta.get("prompt_version"),
            "judge": meta.get("judge"), "scores": scores}
-    rows = [r for r in load(reg) if r["run"] != rel] if reg.exists() else []
+    old = load(reg) if reg.exists() else []
+    prev = next((r for r in old if r["run"] == rel), {})
+    for k in ("model", "model_info"):              # details added by hand to an earlier row survive a re-report
+        row[k] = row[k] or prev.get(k)
+    rows = [r for r in old if r["run"] != rel]
     rows.append(row)
     reg.parent.mkdir(parents=True, exist_ok=True)
     save(reg, rows)

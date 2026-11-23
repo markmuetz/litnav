@@ -199,6 +199,19 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
     return {"rows": rows, "summary": summarize(rows)}
 
 
+def compare(a_rows: list[dict], b_rows: list[dict]) -> dict:
+    """Two runs on the same set, claim by claim, per variant: McNemar's test
+    on the claims exactly one run got right."""
+    from .evalstats import paired
+    out = {}
+    for v in ("A", "B", "R"):
+        a = {r["case"]: r["ok"] for r in a_rows if r["variant"] == v}
+        b = {r["case"]: r["ok"] for r in b_rows if r["variant"] == v}
+        if a and b:
+            out[v] = paired(a, b)
+    return out
+
+
 def _ids_valid(out: dict, ids: list[str]) -> bool:
     """The reply names passages only by valid ids (`passages`, or the old
     comma-separated `passage` string)."""
@@ -209,8 +222,11 @@ def _ids_valid(out: dict, ids: list[str]) -> bool:
 
 
 def summarize(rows):
+    from .evalstats import wilson
+
     def acc(rs):
-        return {"n": len(rs), "ok": sum(r["ok"] for r in rs), "exact": sum(r["exact"] for r in rs)}
+        ok = sum(r["ok"] for r in rs)
+        return {"n": len(rs), "ok": ok, "exact": sum(r["exact"] for r in rs), "ok_ci": wilson(ok, len(rs))}
     s = {"by_variant": {v: acc([r for r in rows if r["variant"] == v]) for v in ("A", "B", "R")}}
     s["by_type"] = {v: {t: acc([r for r in rows if r["variant"] == v and r["type"] == t])
                         for t in sorted({r["type"] for r in rows})} for v in ("A", "B")}

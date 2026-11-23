@@ -435,7 +435,7 @@ def test_eval_model_runs_and_scores(ilib, tmp_path, monkeypatch):
     assert sum(q for _, q in seen) == 1
     assert modeleval.run(lib, ev, rd, log=lambda m: None)["calls"] == 0        # resumes: nothing left
     s = modeleval.report(lib, ev, rd)["summary"]
-    assert s["by_variant"]["A"] == {"n": 2, "ok": 1, "exact": 1}
+    assert s["by_variant"]["A"] == {"n": 2, "ok": 1, "exact": 1, "ok_ci": [0.095, 0.905]}
     assert s["by_variant"]["R"]["ok"] == 1 and s["confusion"]["B"]["contradicted->not_found"] == 1
 
 
