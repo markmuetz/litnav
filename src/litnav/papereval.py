@@ -567,8 +567,8 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
             grams = _ngrams(text)
             if task == "summary":
                 ki = out.get("key_items") or []
-                row["copied_run"] = max([copied_run(f"{out.get('topic', '')} {out.get('summary', '')}", grams)]
-                                        + [copied_run(x.get("statement", ""), grams) for x in ki])
+                cs = derived.copy_stats(lib.get(key), out)
+                row["copied_run"], row["shared_6grams"] = cs["copied_run"], cs["shared_6grams"]
                 row["sentences"] = len(re.findall(r"[.!?](\s|$)", out.get("summary") or ""))
                 row["words"] = len((out.get("summary") or "").split())
                 row["items"] = len(ki)
@@ -703,6 +703,8 @@ def summarize(task, rows) -> dict:
             "words_median": sorted(r["words"] for r in rows if "words" in r)[len([r for r in rows if "words" in r]) // 2]
             if any("words" in r for r in rows) else None,
             "items": n_items, "items_per_paper": round(n_items / max(1, s["outputs"]), 1),
+            "shared_6grams_mean": round(sum(r.get("shared_6grams", 0) for r in rows if r["ok"])
+                                        / max(1, s["outputs"]), 3),
             "items_located": round(sum(r.get("items_located", 0) for r in rows) / max(1, n_items), 3),
             "item_verdicts": dict(iv), "item_precision": round(iv["correct"] / ni, 3) if ni else None,
             "item_precision_ci": evalstats.bootstrap_ratio(

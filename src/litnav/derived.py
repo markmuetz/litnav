@@ -208,38 +208,127 @@ def valid(d) -> bool:
 
 # ---- copying: no run of COPY_LIMIT words from the paper
 
+_FUNCTION = {"of", "the", "on", "and", "for", "in", "at", "to", "a", "an", "with", "from", "by"}
+
+
+def _fold(text: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in t if not unicodedata.combining(c)).lower()
+
+
+def words(text: str) -> list[str]:
+    """Lower-case words, accents folded; letters of any script and digits."""
+    return re.findall(r"[^\W_]+", _fold(text))
+
+
+def repair(text: str) -> str:
+    """Undo PDF line-end hyphenation: 'convec-\ntion' and 'convec- tion' -> 'convection'
+    (not before and/or/to, as in 'pre- and post-')."""
+    text = re.sub(r"(\w)-[ \t]*\n\s*(\w)", r"\1\2", text)
+    return re.sub(r"(\w)- (?!(?:and|or|to|vs)\b)(?=[a-z])", r"\1", text)
+
+
 def ngrams(text: str, n: int = 6) -> set:
-    w = re.findall(r"[a-z0-9]+", text.lower())
+    w = words(repair(text))
     return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
 
 
-def copied_run(out_text: str, paper_grams: set, n: int = 6) -> int:
-    """Longest run of words copied from the paper (0 if under n)."""
-    w = re.findall(r"[a-z0-9]+", out_text.lower())
-    best = run = 0
+def allowed_spans(text: str, title: str = "") -> set[int]:
+    """Word positions in `text` that may match the paper: the paper's title, and
+    a name written out before its acronym, e.g. 'Dynamics of the Atmospheric
+    general circulation Modeled On Non-hydrostatic Domains (DYAMOND)'."""
+    w = words(text)
+    out: set[int] = set()
+    tw = words(title)
+    if len(tw) >= 4:
+        tgrams = {" ".join(tw[i:i + 4]) for i in range(len(tw) - 3)}
+        for i in range(len(w) - 3):
+            if " ".join(w[i:i + 4]) in tgrams:
+                out.update(range(i, i + 4))
+    for m in re.finditer(r"\(([A-Z][A-Za-z0-9-]{1,11})\)", text):
+        acr = [c for c in _fold(m.group(1)) if c.isalnum()]
+        before = words(text[:m.start()])
+        end = len(before)
+        for k in range(min(end, 3 * len(acr)), 0, -1):       # the longest name the acronym spells
+            span = before[end - k:]
+            if span[0][0] != acr[0] or span[0] in _FUNCTION:
+                continue
+            joined, i = "".join(span), 0
+            for c in joined:
+                if i < len(acr) and c == acr[i]:
+                    i += 1
+            if i == len(acr):
+                out.update(range(end - k, end))
+                break
+    return out
+
+
+def longest_copy(out_text: str, paper_grams: set, n: int = 6, title: str = "") -> tuple[int, str, int, int]:
+    """(longest run of words copied from the paper, that run, windows of n words
+    found in the paper, windows in all). Allowed spans (allowed_spans) break runs
+    and are not counted."""
+    w = words(out_text)
+    ok = allowed_spans(out_text, title)
+    best = run = shared = total = 0
+    best_end = 0
     for i in range(len(w) - n + 1):
+        if any(j in ok for j in range(i, i + n)):
+            run = 0
+            continue
+        total += 1
         if " ".join(w[i:i + n]) in paper_grams:
+            shared += 1
             run = run + 1 if run else n
-            best = max(best, run)
+            if run > best:
+                best, best_end = run, i + n
         else:
             run = 0
-    return best
+    return best, " ".join(w[best_end - best:best_end]) if best else "", shared, total
+
+
+def copied_run(out_text: str, paper_grams: set, n: int = 6, title: str = "") -> int:
+    """Longest run of words copied from the paper (0 if under n)."""
+    return longest_copy(out_text, paper_grams, n, title)[0]
+
+
+def _parts(d: dict) -> list[str]:
+    return [d.get("topic", ""), d.get("summary", "")] + [x.get("statement", "") for x in d.get("key_items") or []]
+
+
+def copy_stats(it, d: dict) -> dict:
+    """The longest copied run (and its words), and the share of the summary's
+    6-word sequences found in the paper (logged, no threshold)."""
+    grams = ngrams(it.text())
+    best, phrase, shared, total = 0, "", 0, 0
+    for part in _parts(d):
+        b, ph, s_, t = longest_copy(part, grams, title=it.title or "")
+        shared, total = shared + s_, total + t
+        if b > best:
+            best, phrase = b, ph
+    return {"copied_run": best, "copied_words": phrase,
+            "shared_6grams": round(shared / total, 3) if total else 0.0}
 
 
 def summary_copied_run(it, d: dict) -> int:
-    grams = ngrams(it.text())
-    parts = [d.get("topic", ""), d.get("summary", "")] + [x.get("statement", "") for x in d.get("key_items") or []]
-    return max((copied_run(p, grams) for p in parts), default=0)
+    return copy_stats(it, d)["copied_run"]
 
 
 def check(it, d) -> str | None:
     """Why a model's summary can't be written (None if it can)."""
     if not valid(d):
         return "summary did not match the schema"
-    run = summary_copied_run(it, d)
-    if run >= COPY_LIMIT:
-        return f"copies a run of {run} words from the paper (limit {COPY_LIMIT - 1})"
+    st = copy_stats(it, d)
+    if st["copied_run"] >= COPY_LIMIT:
+        return f"copies a run of {st['copied_run']} words from the paper (limit {COPY_LIMIT - 1}): \"{st['copied_words']}\""
     return None
+
+
+def rephrase_note(err: str) -> str:
+    """The message that re-asks a summary refused for copying."""
+    return (f"Your summary was refused: it {err.split(': ', 1)[0]}. The copied words: "
+            f"{err.split(': ', 1)[1] if ': ' in err else ''}. Write the whole JSON again, every field in your own "
+            "words: no run of words from the paper, apart from names. Reply with JSON only.")
 
 
 def write_summary(it, data: dict, prov: dict) -> bool:
@@ -248,7 +337,8 @@ def write_summary(it, data: dict, prov: dict) -> bool:
               "numbers": [str(n) for n in x.get("numbers") or []], "conditions": (x.get("conditions") or "").strip(),
               "hedging": x.get("hedging"), "chunks": list(x.get("chunks") or [])}
              for x in data.get("key_items") or []]
-    prov = {**prov, "copied_run": summary_copied_run(it, data)}
+    st = copy_stats(it, data)
+    prov = {**prov, "copied_run": st["copied_run"], "shared_6grams": st["shared_6grams"]}
     d = {"topic": data["topic"].strip(), "summary": data["summary"].strip(),
          "keywords": [k.strip() for k in data["keywords"] if k.strip()], "key_items": items, "provenance": prov}
     new = json.dumps(d, indent=2, ensure_ascii=False) + "\n"
@@ -447,6 +537,16 @@ def claude_code_summarize(lib, items, model=CLAUDE_CODE_SUMMARY_MODEL, jobs: int
             return
         d = env.get("structured_output")
         err = check(it, d)
+        if err and err.startswith("copies"):           # ask once more, with the copied words
+            try:
+                env = run_claude(claude_code_args(model, inp["schema"]),
+                                 "Summarize the paper whose text follows.\n\n" + inp["prompt"]
+                                 + "\n\nA previous summary of this paper:\n" + json.dumps(d, ensure_ascii=False)
+                                 + "\n\n" + rephrase_note(err))
+                d = env.get("structured_output")
+                err = check(it, d)
+            except (Stop, RuntimeError) as e:
+                err = f"{err}; asking again failed ({e})"
         if err:
             with lock:
                 log(f"[{n}/{total}] {it.key}: {err}; left for the next run")

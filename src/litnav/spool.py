@@ -222,7 +222,11 @@ def _apply(lib, bid, b, d, *, log) -> int:
         applied = set()
         for r in fresh:
             s = localmodel.apply_result(lib, jobs[r["id"]], r, via="batch")
-            if s["status"] in ("ok", "stale"):
+            if s.get("rephrase"):                   # copied from the paper: the next batch asks again
+                localmodel.enqueue(lib, [s["rephrase"]])
+                applied.add(r["id"])
+                log(f"  {jobs[r['id']]['key']}: {s['error']}; queued again with a note")
+            elif s["status"] in ("ok", "stale"):
                 applied.add(r["id"])
             else:
                 b.setdefault("failed", []).append(r["id"])

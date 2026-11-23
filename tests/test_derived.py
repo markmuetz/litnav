@@ -141,3 +141,38 @@ def test_claude_code_parallel_and_stop(ilib, monkeypatch):
     logs = []
     derived.claude_code_summarize(ilib, items, jobs=1, log=logs.append)
     assert len(calls) == 1 and logs == ["stopping: usage limit reached"]
+
+
+def test_copy_check_repairs_and_allows_names():
+    paper = ("The convec-\ntion over the Sahel is orga- nised by cold pools that spread across the "
+             "region during the afternoon and evening hours in the monsoon season. Dynamics of the Atmospheric "
+             "general circulation Modeled On Non-hydrostatic Domains was a model intercomparison. "
+             "Precipitation at Zürich falls mostly in summer from deep convective storms over the Alps.")
+    g = derived.ngrams(paper)
+    # hyphenation repaired: the copy is still found
+    copied = "the convection over the sahel is organised by cold pools that spread across the region"
+    n, words, shared, total = derived.longest_copy(copied, g)
+    assert n == 15 and words.startswith("the convection over") and shared == total
+    # accents folded: 'Zurich' matches 'Zürich'
+    assert derived.copied_run("precipitation at zurich falls mostly in summer from deep convective storms", g) == 11
+    # a name written out before its acronym, and the paper's title, are allowed
+    name = ("The Dynamics of the Atmospheric general circulation Modeled On Non-hydrostatic Domains (DYAMOND) "
+            "runs differ.")
+    assert derived.copied_run(name, g) == 0
+    assert derived.allowed_spans("Results from the Coupled Model Intercomparison Project (CMIP) show") == {3, 4, 5, 6}
+    title = "Cold pools that spread across the region during the afternoon"
+    assert derived.copied_run("cold pools that spread across the region during the afternoon", g, title=title) == 0
+    assert derived.copied_run("cold pools that spread across the region during the afternoon", g) == 10
+    assert derived.words("Café ΔT_max") == ["cafe", "δt", "max"]
+
+
+def test_copy_stats_logged(ilib):
+    it = ilib.get("smith2021cold")
+    first = " ".join(it.text().split()[:8])
+    d = {**GOOD, "summary": first + ". Then something entirely different happens here today, unlike before."}
+    st = derived.copy_stats(it, d)
+    assert 0 < st["shared_6grams"] < 1 and st["copied_run"] < derived.COPY_LIMIT
+    prov = derived.provenance(it, model="m", via="api", chars=10, truncated=False)
+    derived.write_summary(it, d, prov)
+    p = json.loads(it.summary_path.read_text())["provenance"]
+    assert p["shared_6grams"] == st["shared_6grams"] and "copied_run" in p

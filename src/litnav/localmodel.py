@@ -199,6 +199,15 @@ def summarize_job(it, limit: int | None = None) -> dict:
                          {"role": "user", "content": inp["prompt"] + "\n\nReply with JSON only."}]}
 
 
+def rephrase_job(job: dict, out: dict, err: str) -> dict:
+    """The same summary job, asked once more after a refusal for copying: the
+    model sees its reply and the copied words."""
+    from . import derived
+    return {**job, "id": f"{job['id']}-r", "rephrased": True,
+            "messages": job["messages"] + [{"role": "assistant", "content": json.dumps(out, ensure_ascii=False)},
+                                           {"role": "user", "content": derived.rephrase_note(err)}]}
+
+
 def item_check_jobs(lib, it, *, force: bool = False) -> list[dict]:
     """A verify job for each key item of a paper's summary not yet checked
     (at the current verify prompt), with the passages the item names added
@@ -314,7 +323,10 @@ def apply_result(lib, job: dict, res: dict, *, via: str) -> dict:
         from . import derived
         err = derived.check(it, out)
         if err:
-            return {"id": job["id"], "status": "failed", "error": err}
+            st = {"id": job["id"], "status": "failed", "error": err}
+            if err.startswith("copies") and not job.get("rephrased"):
+                st["rephrase"] = rephrase_job(job, out, err)
+            return st
         prov = {"model": res.get("model", ""), "via": via, "prompt_version": derived.PROMPT_VERSION,
                 "text_sha256": job["text_sha256"],
                 "text_source": it.meta.get("files", {}).get("text_source", ""),
@@ -379,6 +391,10 @@ def run_now(lib, jobs: list[dict], *, log=print) -> list[dict]:
         gate(lib.get(job["key"]))         # sharing may change during a long run
         res = batch_runner.run_job(job, url, model, **kw)
         st = apply_result(lib, job, res, via="local")
+        if st.get("rephrase"):                     # copied from the paper: ask once more
+            log(f"[{i}/{len(jobs)}] {job['key']} {job['kind']}: {st['error']}; asking again")
+            job = st["rephrase"]
+            st = apply_result(lib, job, batch_runner.run_job(job, url, model, **kw), via="local")
         out.append(st)
         log(f"[{i}/{len(jobs)}] {job['key']} {job['kind']}: {st['status']}"
             + (f" ({st['error']})" if st.get("error") else ""))
@@ -497,6 +513,9 @@ def import_results(lib, folder: Path, *, log=print) -> dict:
         st = apply_result(lib, job, res, via="batch")
         counts[st["status"]] += 1
         if st["status"] in ("ok", "stale"):
+            applied.add(res["id"])
+        if st.get("rephrase"):                      # the next batch asks again
+            enqueue(lib, [st["rephrase"]])
             applied.add(res["id"])
         if st["status"] != "ok":
             log(f"  {job['key']} {job['kind']}: {st['status']} ({st.get('error', '')})")

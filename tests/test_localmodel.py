@@ -496,3 +496,30 @@ def test_summary_v2_passages_copy_check_and_item_checks(ilib, monkeypatch):
     assert localmodel.item_check_jobs(lib, lib.get(it.key)) == []        # done: nothing left
     d = lib.get(it.key).as_dict(S.SEND_OUT)                           # what an outside model sees
     assert d["key_items"][1]["kind"] == "limitation" and d["key_items"][1]["check"] == "not_found"
+
+
+def test_copying_summary_is_asked_again(ilib, monkeypatch, tmp_path):
+    lib = strict(ilib)
+    it = lib.get("smith2021cold")
+    copied = {**SUMMARY, "summary": " ".join(it.text().split()[:30])}
+    replies = []
+
+    def reply(msgs):
+        replies.append(msgs)
+        return copied if len(msgs) == 2 else SUMMARY          # the re-ask has the refusal appended
+    FakeModel(monkeypatch, reply)
+    assert cli.main(["-L", str(lib.root), "summarize", "--via", "local", it.key]) == 0
+    assert len(replies) == 2 and "refused" in replies[1][-1]["content"]
+    assert replies[1][-2]["role"] == "assistant"
+    assert lib.get(it.key).summary()["summary"] == SUMMARY["summary"]
+    # through the queue: the refused job comes back with the note, once
+    it.summary_path.unlink()
+    cli.main(["-L", str(lib.root), "summarize", "--via", "queue", it.key])
+    out = tmp_path / "b"
+    cli.main(["-L", str(lib.root), "queue", "export", str(out)])
+    FakeModel(monkeypatch, lambda msgs: copied)
+    batch_runner.run(out / "jobs.jsonl", out / "results.jsonl", "u", "m", log=lambda *a: None)
+    cli.main(["-L", str(lib.root), "queue", "import", str(out)])
+    (q,) = localmodel.queued(lib)
+    assert q["rephrased"] and q["id"].endswith("-r") and "refused" in q["messages"][-1]["content"]
+    assert lib.get(it.key).summary() is None
