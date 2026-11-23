@@ -198,13 +198,17 @@ def test_guard(ilib):
                 "head -5 papers/*/text.txt",
                 f"pdftotext {lib.pdf_dir}/smith2021cold.pdf -",
                 "rg cold",
+                "echo x | rg cold papers",
+                "cd /tmp && cd " + str(lib.root) + " && rg cold",
                 f"grep -rn cold {lib.root}",
                 "cd /tmp && cat " + str(lic.text_path),
                 "cat ~/" + str(lic.text_path.relative_to(Path.home())) if _under_home(lic.text_path)
                 else "cat " + str(lic.text_path)]:
         assert deny(_hook(lib, "Bash", {"command": cmd})), cmd
     for cmd in ["cat papers/smith2021cold/ref.bib", "git status", "litnav search 'cold pools'",
-                "cat papers/jones2019gravity/text.txt", "ls papers", "grep doi papers/smith2021cold/ref.bib"]:
+                "cat papers/jones2019gravity/text.txt", "ls papers", "grep doi papers/smith2021cold/ref.bib",
+                "uv run pytest -q | rg 'assert|where'",            # rg reads the pipe, not the library
+                "cd /tmp && rg cold"]:                              # searches /tmp
         assert _hook(lib, "Bash", {"command": cmd}) is None, cmd
     # with licensed text allowed to models, nothing licensed is blocked
     assert _hook(ilib, "Read", {"file_path": str(lic.text_path)}) is None or True

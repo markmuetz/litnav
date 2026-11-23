@@ -261,6 +261,35 @@ def default_chars(task: str, chars: int | None) -> int | None:
     return chars
 
 
+def reask_jobs(lib, run_dir: Path, task: str) -> list[dict]:
+    """Calls whose reply copied from the paper, asked once more as production
+    does (summary and mentions): written to reask.jsonl."""
+    if task not in ("summary", "mentions"):
+        return []
+    res = {}
+    for r in load(run_dir / "results.jsonl") if (run_dir / "results.jsonl").exists() else []:
+        if r["id"] not in res or r.get("ok"):
+            res[r["id"]] = r
+    out = []
+    for j in load(run_dir / "jobs.jsonl"):
+        r = res.get(j["id"], {})
+        o = r.get("output")
+        if not (r.get("ok") and isinstance(o, dict)) or f"{j['id']}-r" in res:
+            continue
+        it = lib.get(j["key"])
+        if task == "summary":
+            err = derived.check(it, o)
+            if err and err.startswith("copies"):
+                out.append(localmodel.rephrase_job(j, o, err))
+        else:
+            bad = claims.copied(it, o)
+            if bad:
+                out.append(claims.rephrase_job(j, o, bad))
+    if out:
+        save(run_dir / "reask.jsonl", out)
+    return out
+
+
 def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, chars: int | None = None,
         log=print) -> Path:
     """chars: characters of each paper the model reads (default EVAL_CHARS; 0 = the whole paper)."""
@@ -272,7 +301,22 @@ def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, chars: 
     write_run_meta(run_dir, task=task, eval_path=eval_path, model=model, via="local", eval_chars=chars,
                    model_info=localmodel.model_info(lib), profile=lib.local_model.get("profile"))
     batch_runner.run(run_dir / "jobs.jsonl", run_dir / "results.jsonl", url, model, log=log, **kw)
+    rj = reask_jobs(lib, run_dir, task)
+    if rj:
+        log(f"asking {len(rj)} call(s) again: they copied from the paper")
+        batch_runner.run(run_dir / "reask.jsonl", run_dir / "results.jsonl", url, model, log=log, **kw)
     return run_dir
+
+
+def push_reask(lib, run_dir: Path, *, submit=True, log=print) -> dict | None:
+    """After a pulled cluster run: send its re-asks as a batch into the same run folder."""
+    from . import spool
+    task = json.loads((run_dir / "run.json").read_text())["task"]
+    rj = reask_jobs(lib, run_dir, task)
+    if not rj:
+        return None
+    return spool.push(lib, rj, kind="paper-eval", meta={"run_dir": str(run_dir), "task": task}, submit=submit,
+                      log=log)
 
 
 def push(lib, eval_path: Path, task: str, *, model_hint="batch", chars: int | None = None, submit=True,
@@ -477,10 +521,14 @@ def paper_results(run_dir: Path, task: str) -> dict:
                 res[r["id"]] = r
     out = {}
     for j in jobs:
-        r = res.get(j["id"], {})
+        first = res.get(j["id"], {})
+        again = res.get(f"{j['id']}-r", {})
+        r = again if again.get("ok") and isinstance(again.get("output"), dict) else first
         pid = f"{task}-{j['key']}" if task == "mentions" else j["id"]
         p = out.setdefault(pid, {"id": pid, "key": j["key"], "ok": True, "seconds": 0.0, "passages": [],
-                                 "chars_sent": 0, "parts": []})
+                                 "chars_sent": 0, "parts": [], "first_parts": [], "reasked": 0})
+        p["reasked"] += r is again
+        p["first_parts"].append(first.get("output") if isinstance(first.get("output"), dict) else None)
         good = bool(r.get("ok")) and isinstance(r.get("output"), dict)
         p["ok"] = p["ok"] and good
         p["seconds"] = round(p["seconds"] + (r.get("seconds") or 0), 1) if r else p["seconds"]
@@ -562,7 +610,8 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
         core = {k["id"] for k in kps if k.get("core")}
         text = lib.get(key).text()
         row = {"id": jid, "key": key, "ok": out is not None, "seconds": r.get("seconds"), "judged": jid in jud,
-               "paper_chars": len(text), "chars_sent": r["chars_sent"], "calls": len(r["parts"])}
+               "paper_chars": len(text), "chars_sent": r["chars_sent"], "calls": len(r["parts"]),
+               "reasked": r.get("reasked", 0)}
         if out is not None:
             grams = _ngrams(text)
             if task == "summary":
@@ -578,9 +627,10 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
             elif task == "mentions":
                 ms = out.get("mentions") or []
                 row["claims"] = len(ms)
-                runs = [copied_run(m.get("statement", ""), grams) for m in ms]
-                row["copied_run"] = max(runs, default=0)
-                row["copied_12"] = sum(x >= 12 for x in runs)
+                row.update(_copy_row([m.get("statement", "") for m in ms], grams, lib.get(key).title))
+                first = [m.get("statement", "") for o in r.get("first_parts") or [] if o
+                         for m in o.get("mentions") or []]
+                row["copied_12_first"] = _copy_row(first, grams, lib.get(key).title)["copied_12"]
                 ctext = {c["id"]: c["text"] for c in claims.chunks(lib, lib.get(key))}
                 row["grounded"] = sum(claims.grounded(m.get("quote", ""), ctext.get(m.get("chunk"), ""))
                                       for m in ms)
@@ -594,9 +644,7 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
             else:
                 cl = out.get("claims") or []
                 row["claims"] = len(cl)
-                runs = [copied_run(c.get("claim", ""), grams) for c in cl]
-                row["copied_run"] = max(runs, default=0)
-                row["copied_12"] = sum(x >= 12 for x in runs)
+                row.update(_copy_row([c.get("claim", "") for c in cl], grams, lib.get(key).title))
                 row["passages_valid"] = sum(bool(c.get("passages")) and all(p in r["passages"] for p in c["passages"])
                                             for c in cl)
         jd = jud.get(jid)
@@ -637,6 +685,18 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
     s["by_length"] = {f"<={LONG_PAPER // 1000}k": _brief(task, [r for r in rows if r["paper_chars"] <= LONG_PAPER]),
                       f">{LONG_PAPER // 1000}k": _brief(task, [r for r in rows if r["paper_chars"] > LONG_PAPER])}
     return {"meta": meta, "rows": rows, "summary": s}
+
+
+def _copy_row(texts: list[str], grams: set, title: str) -> dict:
+    """Copying in a list of statements: the longest run, how many reach
+    COPY_LIMIT, and the share of 6-word sequences found in the paper (logged)."""
+    runs, shared, total = [], 0, 0
+    for t in texts:
+        b, _, s_, n = derived.longest_copy(t, grams, title=title)
+        runs.append(b)
+        shared, total = shared + s_, total + n
+    return {"copied_run": max(runs, default=0), "copied_12": sum(x >= derived.COPY_LIMIT for x in runs),
+            "shared_6grams": round(shared / total, 3) if total else 0.0}
 
 
 def _brief(task, rows) -> dict:
@@ -703,8 +763,6 @@ def summarize(task, rows) -> dict:
             "words_median": sorted(r["words"] for r in rows if "words" in r)[len([r for r in rows if "words" in r]) // 2]
             if any("words" in r for r in rows) else None,
             "items": n_items, "items_per_paper": round(n_items / max(1, s["outputs"]), 1),
-            "shared_6grams_mean": round(sum(r.get("shared_6grams", 0) for r in rows if r["ok"])
-                                        / max(1, s["outputs"]), 3),
             "items_located": round(sum(r.get("items_located", 0) for r in rows) / max(1, n_items), 3),
             "item_verdicts": dict(iv), "item_precision": round(iv["correct"] / ni, 3) if ni else None,
             "item_precision_ci": evalstats.bootstrap_ratio(
@@ -715,8 +773,12 @@ def summarize(task, rows) -> dict:
         for f in ("kind", "hedging"):
             pairs = [tuple(x) for r in ji for x in r.get(f"{f}_pairs", [])]
             s[f"item_{f}_accuracy"] = round(sum(a == b for a, b in pairs) / len(pairs), 3) if pairs else None
+    ok_rows = [r for r in rows if r["ok"]]
+    s["shared_6grams_mean"] = round(sum(r.get("shared_6grams", 0) for r in ok_rows) / max(1, len(ok_rows)), 3)
+    s["reasked_calls"] = sum(r.get("reasked", 0) for r in rows)
     if task == "mentions":
         n = sum(r.get("claims", 0) for r in rows)
+        s["copied_12_first"] = sum(r.get("copied_12_first", 0) for r in rows)
         s.update({"claims": n, "claims_per_paper": round(n / max(1, s["outputs"]), 1),
                   "copied_12": sum(r.get("copied_12", 0) for r in rows),
                   "grounded": round(sum(r.get("grounded", 0) for r in rows) / max(1, n), 3),

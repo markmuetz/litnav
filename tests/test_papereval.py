@@ -300,3 +300,44 @@ def test_gemini_judge_refuses_licensed(ilib, monkeypatch):
     lib = strict(ilib)
     with pytest.raises(Refused):
         P._gemini(lib, lib.get("smith2021cold"), "s", "p", {}, P.GEMINI_MODEL)
+
+
+def test_mentions_copying_is_reasked_and_logged(ilib, tmp_path, monkeypatch):
+    from litnav import claims as C
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [{"id": "k1", "point": "p", "kind": "finding",
+                                                            "core": True}]}])
+    it = lib.get("jones2019gravity")
+    lifted = " ".join(it.text().split()[:16])
+    seen = []
+
+    def reply(messages):
+        seen.append(messages)
+        ids = [l[1:].split("]")[0] for l in messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
+               if l.startswith("[")]
+        m = {"statement": "Squall lines radiate waves.", "chunk": ids[0], "quote": "", "source": "text",
+             "claim_type": "shown", "evidence": "theory",
+             "experiment": {"model": "", "resolution": "", "method": "", "deep_convection_parametrized": "unknown",
+                            "run_name": ""},
+             "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
+             "hedging": "strong", "hedge_words": "", "value": {"value": "", "units": "", "low": "", "high": ""}}
+        if len(messages) == 2:                                   # first attempt copies, once
+            return {"mentions": [m, {**m, "statement": lifted}]}
+        return {"mentions": [m, {**m, "statement": "A reworded statement about gravity waves."}]}
+    FakeModel(monkeypatch, reply)
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "mentions", tmp_path / "m", chars=100_000, log=lambda m: None)
+    assert len(P.load(rd / "jobs.jsonl")) == 1 and len(seen) == 2
+    assert "copy runs of words" in seen[1][-1]["content"] and lifted.split()[0].lower() in seen[1][-1]["content"]
+    assert P.reask_jobs(lib, rd, "mentions") == []                  # asked once only
+    s = P.report(lib, ev, rd)["summary"]
+    assert s["copied_12_first"] == 1 and s["copied_12"] == 0 and s["reasked_calls"] == 1
+    assert 0 <= s["shared_6grams_mean"] < 1
+    # records still copying after the re-ask are dropped, with their quote
+    recs, quotes = C.records(it.key, [{"mentions": [{"statement": lifted, "chunk": "c"},
+                                                    {"statement": "Fine.", "chunk": "c"}]}], {})
+    keep, q, dropped = C.drop_copied(it, recs, quotes)
+    assert dropped == 1 and [r["statement"] for r in keep] == ["Fine."] and len(q) == 1

@@ -176,3 +176,10 @@ def test_copy_stats_logged(ilib):
     derived.write_summary(it, d, prov)
     p = json.loads(it.summary_path.read_text())["provenance"]
     assert p["shared_6grams"] == st["shared_6grams"] and "copied_run" in p
+
+
+def test_numbers_and_labels_count_once():
+    assert derived.words("rain at 2.5–3.0 mm day−1 in 1.5F and E63-SMCM, high-resolution") == [
+        "rain", "at", "2.5-3.0", "mm", "day-1", "in", "1.5f", "and", "e63-smcm", "high", "resolution"]
+    g = derived.ngrams("The column is anomalously moist at 2.5-3.0 mm day-1 rain rates in this run.")
+    assert derived.copied_run("the column is anomalously moist at 2.5–3.0 mm day−1 rain rates", g) == 11

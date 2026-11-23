@@ -217,9 +217,22 @@ def _fold(text: str) -> str:
     return "".join(c for c in t if not unicodedata.combining(c)).lower()
 
 
+_TOKEN = re.compile(r"[^\W_]+(?:[.,\-\u2212\u2013/][^\W_]+)*")
+
+
 def words(text: str) -> list[str]:
-    """Lower-case words, accents folded; letters of any script and digits."""
-    return re.findall(r"[^\W_]+", _fold(text))
+    """Lower-case words, accents folded; letters of any script and digits. A
+    token with a digit in it is one word however it is punctuated, so a number
+    ('2.5', '2.5-3.0', '−1') or a run label ('1.5F', 'E63-SMCM') counts once;
+    hyphenated words ('high-resolution') are split."""
+    out = []
+    for m in _TOKEN.finditer(_fold(text)):
+        t = m.group()
+        if any(c.isdigit() for c in t):
+            out.append(t.replace("\u2212", "-").replace("\u2013", "-"))
+        else:
+            out += re.findall(r"[^\W_]+", t)
+    return out
 
 
 def repair(text: str) -> str:

@@ -20,6 +20,7 @@ re-extraction. The hedging levels are v0: not yet settled.
 """
 from __future__ import annotations
 
+import json
 import re
 import secrets
 
@@ -280,3 +281,39 @@ def evidence_type(m: dict) -> str:
     dxs = grid_spacings_m(e.get("resolution"))
     classes = {_model_class(param, dx) for dx in dxs} or {_model_class(param, None)}
     return classes.pop() if len(classes) == 1 else "mixed"
+
+
+# ---- copying: statements in the model's own words (derived.COPY_LIMIT)
+
+def copied(it, out: dict) -> list[dict]:
+    """The mentions whose statement copies a run of COPY_LIMIT or more words
+    from the paper (numbers and run labels count once; the title and acronym
+    names are allowed): [{n (1-based), run, words}]."""
+    from . import derived
+    grams = derived.ngrams(it.text())
+    bad = []
+    for n, m in enumerate((out or {}).get("mentions") or [], 1):
+        run, words, _, _ = derived.longest_copy(m.get("statement", ""), grams, title=it.title or "")
+        if run >= derived.COPY_LIMIT:
+            bad.append({"n": n, "run": run, "words": words})
+    return bad
+
+
+def rephrase_job(job: dict, out: dict, bad: list[dict]) -> dict:
+    """The same call, asked once more: the model sees its reply and which
+    statements copied which words, and rewrites those."""
+    lines = "\n".join(f"- mention {b['n']}: \"{b['words']}\"" for b in bad)
+    note = (f"These statements copy runs of words from the paper:\n{lines}\nWrite the whole JSON again. "
+            "Rewrite those statements in your own words (names may stay); keep the other mentions as they "
+            "are. Reply with JSON only.")
+    return {**job, "id": f"{job['id']}-r", "rephrased": True,
+            "messages": job["messages"] + [{"role": "assistant", "content": json.dumps(out, ensure_ascii=False)},
+                                           {"role": "user", "content": note}]}
+
+
+def drop_copied(it, recs: list[dict], quotes: list[dict]) -> tuple[list[dict], list[dict], int]:
+    """Records still copying after the re-ask are left out (their quote too)."""
+    bad = {b["n"] - 1 for b in copied(it, {"mentions": recs})}
+    keep = [r for i, r in enumerate(recs) if i not in bad]
+    ids = {r["id"] for r in keep}
+    return keep, [q for q in quotes if q["mention"] in ids], len(bad)

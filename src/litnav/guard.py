@@ -30,7 +30,7 @@ from . import sharing as S
 OPEN_FILES = {"ref.bib", "meta.toml", "summary.json"}
 RECURSIVE = {"rg", "grep", "egrep", "fgrep", "ag", "ack", "find", "fd", "tar", "zip", "rsync", "cp",
              "scp", "du", "pdftotext", "pdfgrep", "xargs"}
-SPLIT = re.compile(r"\|\||&&|[;|&\n]")
+SPLIT = re.compile(r"(\|\||&&|[;|&\n])")
 SAFE_LEAD = {"litnav"}
 
 
@@ -99,7 +99,13 @@ class Guard:
         return None
 
     def bash_reason(self, command: str, base: Path) -> str | None:
-        for seg in SPLIT.split(command):
+        parts = SPLIT.split(command)
+        sep = ""
+        for i, seg in enumerate(parts):
+            if i % 2:                                  # a separator
+                sep = seg
+                continue
+            piped = sep == "|"                         # reads the previous command's output
             seg = seg.strip()
             if not seg:
                 continue
@@ -112,6 +118,9 @@ class Guard:
             if not argv:
                 continue
             lead = os.path.basename(argv[0])
+            if lead == "cd" and len(argv) == 2 and not any(c in argv[1] for c in "*?[$`"):
+                base = base / os.path.expanduser(argv[1])        # later commands run there
+                continue
             if lead in SAFE_LEAD or (lead == "uv" and "litnav" in argv[:4]):
                 continue
             recursive = lead in RECURSIVE and (lead not in ("grep", "egrep", "fgrep", "cp")
@@ -132,6 +141,7 @@ class Guard:
                     if r:
                         return r
             if recursive and len(argv) >= 1 and lead in ("rg", "ag", "ack", "fd", "find") and \
+                    not (piped and lead in ("rg", "ag", "ack")) and \
                     not any(not a.startswith("-") for a in argv[2:]):
                 r = self.path_reason(base, recursive=True)       # searches the cwd
                 if r:

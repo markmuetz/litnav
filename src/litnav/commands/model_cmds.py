@@ -35,7 +35,7 @@ def add(sub):
     p = sub.add_parser("paper-eval", help="evaluate models at whole-paper tasks (summary, extract) on open "
                        "papers, judged by Claude: pick, gold, run, push, baseline, judge, report")
     p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report", "compare",
-                                      "agree"],
+                                      "agree", "reask"],
                    help="compare: --run-dir A --against B, item by item; agree: Claude's and Gemini's judgments "
                         "of one run")
     p.add_argument("--eval", default="eval/paper-eval.jsonl")
@@ -52,6 +52,8 @@ def add(sub):
                    "(default 72000, the pilot's; 0 = the whole paper); for mentions, the characters per call "
                    "(default 20000; the whole paper is read). Fixed per run, recorded in run.json")
     p.add_argument("--against", help="compare: the second run folder")
+    p.add_argument("--push", action="store_true", help="reask: send the re-asks to the cluster spool "
+                   "(after `queue pull`), not to [local_model]")
     p.set_defaults(func=cmd_paper_eval)
 
     p = sub.add_parser("evals", help="every recorded eval run (eval/runs.jsonl): task, model, judge, scores")
@@ -378,6 +380,19 @@ def cmd_paper_eval(a):
     if a.action == "judge":
         n = P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, judge_with=a.judge, log=log)
         log(f"judged {n} output(s) in {rd} ({a.judge})")
+        return
+    if a.action == "reask":
+        if a.push:
+            r = P.push_reask(lib, rd, submit=not a.no_submit, log=log)
+            log(f"pushed batch {r['batch']} of re-asks" if r else "nothing to ask again")
+        else:
+            from .. import batch_runner, localmodel
+            task = json.loads((rd / "run.json").read_text())["task"]
+            rj = P.reask_jobs(lib, rd, task)
+            if rj:
+                url, model, kw = localmodel.endpoint(lib)
+                batch_runner.run(rd / "reask.jsonl", rd / "results.jsonl", url, model, log=log, **kw)
+            log(f"asked {len(rj)} call(s) again")
         return
     if a.action == "agree":
         print(json.dumps(P.agree(lib, ev, rd), indent=1))
