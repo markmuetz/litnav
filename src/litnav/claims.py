@@ -13,22 +13,29 @@ Every call also sees the title and abstract, for context.
 
 This prompt is the production one (`litnav claims extract`) and the one
 `litnav paper-eval --task mentions` measures, so the eval measures what runs.
-The evidence_type and hedging values are v0: not yet settled.
+Model evidence is classified by code, not by the model (EVIDENCE_RULE): the
+model records whether deep convection is parametrized, the grid spacing and
+the paper's own name for the run, so the thresholds can change without
+re-extraction. The hedging levels are v0: not yet settled.
 """
 from __future__ import annotations
 
 import re
 import secrets
 
-PROMPT_VERSION = 2              # v2: own results compared with cited work are shown; evidence unknown
-SCHEMA_VERSION = "0.2"          # v0 evidence_type and hedging values, plus unknown
+PROMPT_VERSION = 3              # v3: model evidence as facts (scheme, grid spacing, run name); code labels it
+SCHEMA_VERSION = "0.3"
+EVIDENCE_RULE = 1               # evidence_type() below; Mark, 23 Nov 2026
+LES_MAX_M = 500                 # grid spacing at or below this, with no deep-convection scheme: les
 MAX_ITEMS = 40                  # mentions a call; report counts calls that hit it
 GROUP_CHARS = 20_000            # passages per call: fits a 32k-token context with room to think
 SKIP_KINDS = {"ack", "front"}   # not claims; the title and abstract go to every call anyway
 
 CLAIM_TYPES = ["shown", "restated", "assumed", "speculation"]
-EVIDENCE_TYPES = ["observations", "reanalysis", "les_crm", "km_scale", "parametrized_model", "theory", "mixed",
-                  "unknown"]
+EVIDENCE_KINDS = ["observations", "reanalysis", "model", "theory", "mixed", "unknown"]     # what the model labels
+EVIDENCE_TYPES = ["observations", "reanalysis", "les", "cpm", "parametrized_model", "theory", "mixed",
+                  "unknown"]                                                             # the record's, by rule
+YNU = ["yes", "no", "unknown"]
 HEDGING = ["strong", "moderate", "weak"]
 SOURCES = ["text", "figure", "table"]
 
@@ -52,12 +59,16 @@ SYSTEM = (
     "method choice the paper takes as given); speculation (offered as a possibility or explanation "
     "without support in this paper). A claim the paper attributes to cited work is restated; the "
     "paper's own result compared with cited work is shown.\n"
-    "- evidence_type (provisional list): observations, reanalysis, les_crm (large-eddy or "
-    "cloud-resolving, limited area), km_scale (convection-permitting regional or global), "
-    "parametrized_model (GCM or RCM with parametrized convection), theory, mixed, unknown. The evidence "
-    "behind the claim (for a restated claim, the cited work's); unknown if the passages don't say: "
+    "- evidence: what the claim rests on (for a restated claim, the cited work's): observations, "
+    "reanalysis, model (any numerical simulation), theory, mixed, or unknown if the passages don't say: "
     "don't guess.\n"
-    "- experiment: the model, its resolution and the method, where the claim rests on one ('' if not).\n"
+    "- experiment, where the claim rests on a model run ('' or unknown if not, or not stated): the model; "
+    "resolution: the horizontal grid spacing as written (e.g. '2.2 km', '250 m', '0.25 degrees'); "
+    "method; deep_convection_parametrized: yes if the run uses a deep-convection (cumulus) scheme, no "
+    "if convection is explicit, unknown if not stated; run_name: the paper's own name for the kind of "
+    "run (e.g. 'LES', 'CRM', 'convection-permitting', 'storm-resolving', 'km-scale', 'GCM'). CRM, CPM, "
+    "convection-allowing, storm-resolving (SRM, GSRM, GCRM) and LES are names for runs without a "
+    "deep-convection scheme; 'km-scale' alone does not say whether convection is parametrized.\n"
     "- conditions: the region, regime, period and resolution it holds for ('' where not stated).\n"
     "- hedging (provisional levels): strong (shows, demonstrates, is), moderate (suggests, indicates, "
     "likely), weak (may, could, possibly). hedge_words: the paper's own hedge, a few words ('' if none).\n"
@@ -75,9 +86,12 @@ def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
             "quote": s,
             "source": {"type": "string", "enum": SOURCES},
             "claim_type": {"type": "string", "enum": CLAIM_TYPES},
-            "evidence_type": {"type": "string", "enum": EVIDENCE_TYPES},
-            "experiment": {"type": "object", "properties": {"model": s, "resolution": s, "method": s},
-                           "required": ["model", "resolution", "method"], "additionalProperties": False},
+            "evidence": {"type": "string", "enum": EVIDENCE_KINDS},
+            "experiment": {"type": "object", "properties": {
+                "model": s, "resolution": s, "method": s,
+                "deep_convection_parametrized": {"type": "string", "enum": YNU}, "run_name": s},
+                "required": ["model", "resolution", "method", "deep_convection_parametrized", "run_name"],
+                "additionalProperties": False},
             "conditions": {"type": "object", "properties": {"region": s, "regime": s, "period": s,
                                                             "resolution": s},
                            "required": ["region", "regime", "period", "resolution"],
@@ -86,7 +100,7 @@ def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
             "hedge_words": s,
             "value": {"type": "object", "properties": {"value": s, "units": s, "low": s, "high": s},
                       "required": ["value", "units", "low", "high"], "additionalProperties": False}},
-        "required": ["statement", "chunk", "quote", "source", "claim_type", "evidence_type", "experiment",
+        "required": ["statement", "chunk", "quote", "source", "claim_type", "evidence", "experiment",
                      "conditions", "hedging", "hedge_words", "value"],
         "additionalProperties": False}}}, "required": ["mentions"], "additionalProperties": False}
 
@@ -197,8 +211,11 @@ def records(key: str, replies: list[dict], chunk_info: dict, *, run: str = "") -
                 "id": mid, "type": "mention", "schema_version": SCHEMA_VERSION, "paper": key,
                 "chunk": m.get("chunk"), "section": ci.get("section_title"), "page": ci.get("page"),
                 "statement": m.get("statement", ""), "source": m.get("source"),
-                "claim_type": m.get("claim_type"), "evidence_type": m.get("evidence_type"),
-                "experiment": m.get("experiment") or {}, "conditions": m.get("conditions") or {},
+                "claim_type": m.get("claim_type"), "evidence_type": evidence_type(m),
+                "evidence_rule": EVIDENCE_RULE, "evidence": m.get("evidence"),
+                "experiment": {**(m.get("experiment") or {}),
+                               "grid_spacing_m": grid_spacing_m((m.get("experiment") or {}).get("resolution"))},
+                "conditions": m.get("conditions") or {},
                 "hedging": {"level": m.get("hedging"), "words": m.get("hedge_words", "")},
                 "value": _value(m.get("value")), "review": "unchecked", "run": run,
                 "prompt_version": PROMPT_VERSION})
@@ -214,3 +231,52 @@ def grounded(quote: str, chunk_text: str) -> bool:
         return re.sub(r"\s+", " ", s).strip().lower()
     q = norm(quote)
     return bool(q) and q in norm(chunk_text)
+
+
+# ---- evidence type, by rule (EVIDENCE_RULE 1; the thresholds live here, not in the prompt)
+
+_UNITS = {"m": 1.0, "metres": 1.0, "meters": 1.0, "km": 1000.0, "kilometres": 1000.0, "kilometers": 1000.0,
+          "deg": 111_000.0, "degree": 111_000.0, "degrees": 111_000.0, "°": 111_000.0}
+_SPACING = re.compile(r"(\d+(?:\.\d+)?|\d*\.\d+)\s*(?:(?:[-–]|to|and)\s*(\d+(?:\.\d+)?)\s*)?"
+                      r"(kilometres|kilometers|km|metres|meters|m|degrees|degree|deg|°)(?![a-z])", re.I)
+
+
+def grid_spacings_m(text: str | None) -> list[float]:
+    """Every grid spacing written in `text`, in metres ('1-4 km' gives both ends)."""
+    out = []
+    for a, b, u in _SPACING.findall(text or ""):
+        f = _UNITS[u.lower()]
+        out += [float(a) * f] + ([float(b) * f] if b else [])
+    return out
+
+
+def grid_spacing_m(text: str | None) -> float | None:
+    """The finest grid spacing written, in metres (None if none)."""
+    xs = grid_spacings_m(text)
+    return min(xs) if xs else None
+
+
+def _model_class(param: str | None, dx: float | None) -> str:
+    if param == "yes":
+        return "parametrized_model"
+    if param == "no":
+        if dx is None:
+            return "unknown"
+        return "les" if dx <= LES_MAX_M else "cpm"
+    return "unknown"
+
+
+def evidence_type(m: dict) -> str:
+    """The record's evidence type from the model's facts (rule 1, Mark 23 Nov 2026):
+    a deep-convection scheme -> parametrized_model, whatever the grid spacing;
+    otherwise grid spacing <= 500 m -> les, else cpm (no upper bound: grey-zone
+    runs keep their spacing and can be filtered); missing facts -> unknown.
+    Several grid spacings that fall in different classes -> mixed."""
+    ev = m.get("evidence")
+    if ev != "model":
+        return ev if ev in EVIDENCE_TYPES else "unknown"
+    e = m.get("experiment") or {}
+    param = e.get("deep_convection_parametrized")
+    dxs = grid_spacings_m(e.get("resolution"))
+    classes = {_model_class(param, dx) for dx in dxs} or {_model_class(param, None)}
+    return classes.pop() if len(classes) == 1 else "mixed"

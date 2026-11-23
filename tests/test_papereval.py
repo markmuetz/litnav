@@ -154,8 +154,9 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
         ids = [l[1:].split("]")[0] for l in lines if l.startswith("[")]
         text = lines[1]
         m = {"statement": "Gravity waves radiate from squall lines.", "chunk": ids[0], "quote": text[:30],
-             "source": "text", "claim_type": "shown", "evidence_type": "theory",
-             "experiment": {"model": "", "resolution": "", "method": ""},
+             "source": "text", "claim_type": "shown", "evidence": "theory",
+             "experiment": {"model": "", "resolution": "", "method": "", "deep_convection_parametrized": "unknown",
+                            "run_name": ""},
              "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
              "hedging": "strong", "hedge_words": "", "value": {"value": "", "units": "", "low": "", "high": ""}}
         return {"mentions": [m, {**m, "quote": "words that are not there", "claim_type": "shown"}]}
@@ -190,13 +191,15 @@ def test_mention_groups_and_records():
     assert [[r["id"] for r in x] for x in g] == [["a1"], ["b1"], ["b2", "c1"]]
     assert [[r["id"] for r in x] for x in C.groups(rows, budget=10_000)] == [["a1", "b1", "b2", "c1"]]
     m = {"statement": "s", "chunk": "b1", "quote": "q", "source": "figure", "claim_type": "restated",
-         "evidence_type": "km_scale", "experiment": {}, "conditions": {"region": "Sahel"}, "hedging": "weak",
+         "evidence": "model", "experiment": {"resolution": "2.2 km", "deep_convection_parametrized": "no"},
+         "conditions": {"region": "Sahel"}, "hedging": "weak",
          "hedge_words": "may", "value": {"value": "1,200", "units": "m", "low": "", "high": "1500"}}
     recs, quotes = C.records("k", [{"mentions": [m]}, None], {"b1": {"section_title": "Results", "page": 3}})
     (r,) = recs
     assert r["id"].startswith("m_") and "quote" not in r and quotes[0]["mention"] == r["id"]
     assert r["value"] == {"value": 1200.0, "as_written": "1,200", "units": "m", "low": None, "high": 1500.0}
     assert r["hedging"] == {"level": "weak", "words": "may"} and r["section"] == "Results" and r["page"] == 3
+    assert r["evidence_type"] == "cpm" and r["experiment"]["grid_spacing_m"] == 2200.0 and r["evidence_rule"] == 1
     assert C._value({"value": "", "units": "", "low": "", "high": ""}) is None
     assert C.grounded("radiate from squall-\nlines", "Waves RADIATE   from squall-\n lines here")
     assert not C.grounded("", "anything")
@@ -204,7 +207,84 @@ def test_mention_groups_and_records():
 
 def test_mention_prompt_v2_rules():
     from litnav import claims as C
-    assert "unknown" in C.EVIDENCE_TYPES and "don't guess" in C.SYSTEM
+    assert "unknown" in C.EVIDENCE_KINDS and "don't guess" in C.SYSTEM
     assert "own result compared with cited work is shown" in C.SYSTEM
     assert "followed by a citation is restated" not in C.SYSTEM
     assert C.schema(["a"])["properties"]["mentions"]["maxItems"] == C.MAX_ITEMS
+
+
+@pytest.mark.parametrize("ev,res,param,want", [
+    ("model", "2.2 km", "yes", "parametrized_model"),      # a scheme wins at any grid spacing
+    ("model", "250 m", "yes", "parametrized_model"),
+    ("model", "500 m", "no", "les"),                       # <= 500 m without a scheme
+    ("model", "0.5 km", "no", "les"),
+    ("model", "1 km", "no", "cpm"),
+    ("model", "7 km", "no", "cpm"),                        # no upper bound: grey zone kept as cpm
+    ("model", "0.25 degrees", "no", "cpm"),
+    ("model", "", "no", "unknown"),                        # missing facts
+    ("model", "3 km", "unknown", "unknown"),
+    ("model", "4 km and 250 m", "no", "mixed"),            # runs in different classes
+    ("model", "1-4 km", "no", "cpm"),
+    ("observations", "", "unknown", "observations"),
+    ("bogus", "", "", "unknown"),
+])
+def test_evidence_rule(ev, res, param, want):
+    from litnav import claims as C
+    assert C.evidence_type({"evidence": ev, "experiment": {"resolution": res,
+                                                           "deep_convection_parametrized": param}}) == want
+
+
+def test_grid_spacing_parse():
+    from litnav import claims as C
+    assert C.grid_spacings_m("dx = 1.5 km (3 km parent)") == [1500.0, 3000.0]
+    assert C.grid_spacing_m("125 m") == 125.0 and C.grid_spacing_m("1–4 km") == 1000.0
+    assert C.grid_spacing_m("2 deg") == 222_000.0 and C.grid_spacing_m("N/A") is None
+    assert C.grid_spacing_m("40 levels, 3 km") == 3000.0
+
+
+def test_gemini_judge_agree_and_registry(ilib, tmp_path, monkeypatch):
+    import subprocess
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [
+        {"id": "k1", "point": "p", "kind": "finding", "core": True},
+        {"id": "k2", "point": "q", "kind": "data", "core": False}]}])
+    FakeModel(monkeypatch, lambda m: {"claims": [
+        {"claim": "Gravity waves radiate from squall lines.", "kind": "finding", "numbers": [], "conditions": "",
+         "strength": "shown", "passages": []}] * 2})
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "extract", tmp_path / "x", log=lambda m: None)
+    assert P.judge(lib, ev, rd, log=lambda m: None) == 1
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append((cmd, kw))
+        out = {"claims": [{"n": 1, "verdict": "correct", "strength_ok": True, "standalone": True, "note": ""},
+                          {"n": 2, "verdict": "overstated", "strength_ok": False, "standalone": True, "note": ""}],
+               "key_points_covered": {"k1": [1], "k2": [2]}}
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"status": "SUCCESS", "structured_output": out}), "")
+    monkeypatch.setattr("shutil.which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert P.judge(lib, ev, rd, judge_with="gemini", log=lambda m: None) == 1
+    cmd, kw = seen[0]
+    assert cmd[0] == "agy" and "--sandbox" in cmd and cmd[cmd.index("--model") + 1] == P.GEMINI_MODEL
+    assert kw["stdin"] == subprocess.DEVNULL and kw["cwd"] != str(lib.root)
+    assert (rd / "judgments.jsonl").exists() and (rd / "judgments-gemini.jsonl").exists()
+    meta = json.loads((rd / "run.json").read_text())
+    assert meta["judge"]["model"] == "claude-opus-5-5" and meta["judges"]["gemini"]["model"] == P.GEMINI_MODEL
+    a = P.agree(lib, ev, rd)
+    assert a["papers"] == 1 and a["key_points"]["n"] == 2 and a["key_points"]["agree"] == 0.5
+    assert a["verdict"] == {"n": 1, "agree": 1.0, "kappa": 1.0, "confusion": {}}
+    reg = tmp_path / "runs.jsonl"
+    for j in ("claude", "gemini"):
+        P.record(lib, rd, P.report(lib, ev, rd, j)["summary"], registry=reg, judge_with=j)
+    P.record(lib, rd, P.report(lib, ev, rd, "gemini")["summary"], registry=reg, judge_with="gemini")
+    assert sorted(r["judge"]["model"] for r in P.load(reg)) == ["claude-opus-5-5", P.GEMINI_MODEL]
+
+
+def test_gemini_judge_refuses_licensed(ilib, monkeypatch):
+    lib = strict(ilib)
+    with pytest.raises(Refused):
+        P._gemini(lib, lib.get("smith2021cold"), "s", "p", {}, P.GEMINI_MODEL)

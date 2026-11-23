@@ -111,6 +111,36 @@ def _claude(lib, it, system, prompt, schema, model):
     return out, env.get("modelUsage") and list(env["modelUsage"])[0] or model
 
 
+GEMINI_MODEL = "gemini-4-neon-high"      # Mark's choice for the second judge, 23 Nov 2026
+JUDGES = ("claude", "gemini")
+
+
+def _gemini(lib, it, system, prompt, schema, model, timeout=1200):
+    """One structured call to Gemini through the `agy` CLI, from an empty folder.
+    agy keeps its conversations (no setting turns that off), so like the Claude
+    judge it sees open papers only. The prompt goes in argv: agy -p does not
+    take it from stdin."""
+    import shutil
+    import subprocess
+    import tempfile
+    derived.outbound(lib, [it])                      # open papers only
+    if not shutil.which("agy"):
+        raise RuntimeError("the agy CLI is not installed")
+    cmd = ["agy", "-p", f"{system}\n\n{prompt}", "--output-format", "json", "--json-schema", json.dumps(schema),
+           "--model", model, "--sandbox", "--disable-slash-commands"]
+    with tempfile.TemporaryDirectory(prefix="litnav-agy-") as td:
+        p = subprocess.run(cmd, capture_output=True, text=True, cwd=td, timeout=timeout, stdin=subprocess.DEVNULL)
+    env = json.loads(p.stdout)
+    out = env.get("structured_output")
+    if not isinstance(out, dict):
+        raise RuntimeError(f"agy: no structured output (status {env.get('status')})")
+    return out, model
+
+
+def judgments_path(run_dir: Path, judge: str = "claude") -> Path:
+    return run_dir / ("judgments.jsonl" if judge == "claude" else f"judgments-{judge}.jsonl")
+
+
 def gold(lib, eval_path: Path, *, model="opus", jobs=4, log=print) -> int:
     rows = load(eval_path)
     todo = [r for r in rows if not r.get("key_points")]
@@ -346,7 +376,7 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
                                                                        "items": {"type": "integer"}}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 1, "extract": 1, "mentions": 2}
+JUDGE_VERSION = {"summary": 1, "extract": 1, "mentions": 3}
 
 
 def _mention_line(n, m) -> str:
@@ -354,9 +384,9 @@ def _mention_line(n, m) -> str:
     e = m.get("experiment") or {}
     v = m.get("value") or {}
     bits = [f"chunk {m.get('chunk')}", f"source {m.get('source')}", f"claim_type {m.get('claim_type')}",
-            f"evidence_type {m.get('evidence_type')}",
+            f"evidence_type {claims.evidence_type(m) if 'evidence' in m else m.get('evidence_type')}",
             f"hedging {m.get('hedging')}" + (f" ('{m['hedge_words']}')" if m.get("hedge_words") else "")]
-    cond = "; ".join(f"{k} {x}" for k, x in {**e, **c}.items() if x)
+    cond = "; ".join(f"{k} {x}" for k, x in {**e, **c}.items() if x and k not in ("run_name",))
     if cond:
         bits.append(cond)
     if str(v.get("value", "")).strip():
@@ -387,9 +417,10 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "it to other work, usually with a citation, or states it as known background); assumed (a "
                 "premise or method choice taken as given); speculation (offered without support here). The paper's "
                 "own result compared with cited work is shown.\n"
-                "   evidence_type: observations; reanalysis; les_crm (large-eddy or cloud-resolving, limited "
-                "area); km_scale (convection-permitting regional or global); parametrized_model (GCM or RCM); "
-                "theory; mixed; unknown (the paper doesn't say).\n"
+                "   evidence_type: observations; reanalysis; les, cpm or parametrized_model for a model run (a "
+                "deep-convection scheme makes it parametrized_model at any grid spacing; otherwise les if "
+                "the grid spacing is 500 m or less, cpm if more); theory; mixed; unknown (the paper "
+                "doesn't say, or a model run's scheme or grid spacing isn't stated).\n"
                 "   hedging: strong (shows, demonstrates); moderate (suggests, indicates, likely); weak (may, "
                 "could, possibly): how firmly the paper states it.\n"
                 "   standalone: is the statement understandable without the paper?\n"
@@ -443,11 +474,15 @@ def paper_results(run_dir: Path, task: str) -> dict:
     return out
 
 
-def judge(lib, eval_path: Path, run_dir: Path, *, model="opus", jobs=4, log=print) -> int:
+def judge(lib, eval_path: Path, run_dir: Path, *, model=None, jobs=4, judge_with="claude", log=print) -> int:
+    """Grade each paper's output; judge_with claude (default) or gemini, each
+    into its own judgments file."""
     meta = json.loads((run_dir / "run.json").read_text())
     task = meta["task"]
     cases = {r["key"]: r for r in load(eval_path)}
-    jpath = run_dir / "judgments.jsonl"
+    model = model or ("opus" if judge_with == "claude" else GEMINI_MODEL)
+    call = _claude if judge_with == "claude" else _gemini
+    jpath = judgments_path(run_dir, judge_with)
     have = {r["id"] for r in load(jpath)} if jpath.exists() else set()
     todo = [r for r in paper_results(run_dir, task).values() if r["ok"] and r["id"] not in have]
 
@@ -456,7 +491,7 @@ def judge(lib, eval_path: Path, run_dir: Path, *, model="opus", jobs=4, log=prin
         it = lib.get(key)
         text = it.text()[:JUDGE_CHARS]
         try:
-            out, real = _claude(lib, it, JUDGE_SYSTEM, judge_prompt(task, it, text, cases[key]["key_points"],
+            out, real = call(lib, it, JUDGE_SYSTEM, judge_prompt(task, it, text, cases[key]["key_points"],
                                                                      r["output"]),
                                 JUDGE_SCHEMA[task], model)
         except Exception as e:                       # noqa: BLE001 - record, go on
@@ -471,7 +506,10 @@ def judge(lib, eval_path: Path, run_dir: Path, *, model="opus", jobs=4, log=prin
         for d in done:
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
     if done:
-        write_run_meta(run_dir, judge={"model": done[0]["judge_model"], "prompt_version": JUDGE_VERSION[task]})
+        info = {"model": done[0]["judge_model"], "prompt_version": JUDGE_VERSION[task]}
+        m = json.loads((run_dir / "run.json").read_text())
+        judges = {**(m.get("judges") or {}), judge_with: info}
+        write_run_meta(run_dir, judges=judges, **({"judge": info} if judge_with == "claude" else {}))
     return len(done)
 
 
@@ -495,12 +533,14 @@ def _ngrams(text, n=6):
     return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
 
 
-def report(lib, eval_path: Path, run_dir: Path) -> dict:
+def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> dict:
     meta = json.loads((run_dir / "run.json").read_text())
     task = meta["task"]
     cases = {r["key"]: r for r in load(eval_path)}
-    jud = {r["id"]: r["judgment"] for r in load(run_dir / "judgments.jsonl")} \
-        if (run_dir / "judgments.jsonl").exists() else {}
+    jp = judgments_path(run_dir, judge_with)
+    jud = {r["id"]: r["judgment"] for r in load(jp)} if jp.exists() else {}
+    if judge_with != "claude":
+        meta = {**meta, "judge": (meta.get("judges") or {}).get(judge_with)}
     rows = []
     for jid, r in paper_results(run_dir, task).items():
         key = r["key"]
@@ -527,9 +567,10 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
                 row["passages_valid"] = sum(m.get("chunk") in ctext for m in ms)
                 row["calls_at_cap"] = sum(len((o or {}).get("mentions") or []) >= claims.MAX_ITEMS
                                           for o in r["parts"])
-                row["evidence_unknown"] = sum(m.get("evidence_type") == "unknown" for m in ms)
-                row["model_labels"] = [{f: m.get(f) for f in ("claim_type", "evidence_type", "hedging")}
-                                       for m in ms]
+                evs = [claims.evidence_type(m) if "evidence" in m else m.get("evidence_type") for m in ms]
+                row["evidence_unknown"] = sum(e == "unknown" for e in evs)
+                row["model_labels"] = [{"claim_type": m.get("claim_type"), "evidence_type": e,
+                                        "hedging": m.get("hedging")} for m, e in zip(ms, evs)]
             else:
                 cl = out.get("claims") or []
                 row["claims"] = len(cl)
@@ -654,20 +695,75 @@ def summarize(task, rows) -> dict:
 
 # ---- the registry of runs (eval/runs.jsonl, tracked): every task, model and judge
 
-def record(lib, run_dir: Path, scores: dict, *, registry: Path | None = None) -> Path:
+def record(lib, run_dir: Path, scores: dict, *, registry: Path | None = None, judge_with: str = "claude") -> Path:
+    """One row a run and judge (a run judged by Claude and by Gemini has two)."""
     reg = registry or lib.root / "eval" / "runs.jsonl"
     meta = json.loads((run_dir / "run.json").read_text())
+    if judge_with != "claude":
+        meta["judge"] = (meta.get("judges") or {}).get(judge_with)
     rel = str(run_dir.relative_to(lib.root)) if run_dir.is_relative_to(lib.root) else str(run_dir)
     row = {"run": rel, "task": meta.get("task"), "eval": meta.get("eval"), "eval_sha256": meta.get("eval_sha256"),
            "date": meta.get("created", "")[:10], "model": meta.get("model"), "via": meta.get("via"),
            "model_info": meta.get("model_info"), "prompt_version": meta.get("prompt_version"),
            "judge": meta.get("judge"), "scores": scores}
     old = load(reg) if reg.exists() else []
-    prev = next((r for r in old if r["run"] == rel), {})
+
+    def same(r):
+        return r["run"] == rel and _judge_name(r.get("judge")) == _judge_name(row["judge"])
+    prev = next((r for r in old if same(r)), {})
     for k in ("model", "model_info"):              # details added by hand to an earlier row survive a re-report
         row[k] = row[k] or prev.get(k)
-    rows = [r for r in old if r["run"] != rel]
+    rows = [r for r in old if not same(r)]
     rows.append(row)
     reg.parent.mkdir(parents=True, exist_ok=True)
     save(reg, rows)
     return reg
+
+
+def _judge_name(j: dict | None) -> str:
+    m = str((j or {}).get("model") or "")
+    return "gemini" if m.startswith("gemini") else ("claude" if m else "")
+
+
+# ---- the two judges against each other
+
+def _kappa(pairs: list[tuple]) -> float | None:
+    if not pairs:
+        return None
+    n = len(pairs)
+    po = sum(a == b for a, b in pairs) / n
+    cats = {x for p in pairs for x in p}
+    pe = sum((sum(a == c for a, _ in pairs) / n) * (sum(b == c for _, b in pairs) / n) for c in cats)
+    return round((po - pe) / (1 - pe), 3) if pe < 1 else 1.0
+
+
+def agree(lib, eval_path: Path, run_dir: Path, a: str = "claude", b: str = "gemini") -> dict:
+    """How often two judges agree on one run: key points covered (every task),
+    and, for claim lists, each claim's verdict and labels (matched by number)."""
+    ra, rb = report(lib, eval_path, run_dir, a), report(lib, eval_path, run_dir, b)
+    task = ra["meta"]["task"]
+    ja = {r["id"]: r["judgment"] for r in load(judgments_path(run_dir, a))}
+    jb = {r["id"]: r["judgment"] for r in load(judgments_path(run_dir, b))}
+    both = sorted(set(ja) & set(jb))
+    rows_a = {r["id"]: r for r in ra["rows"]}
+    rows_b = {r["id"]: r for r in rb["rows"]}
+    kp = [(k in set(rows_a[i].get("kp_hits", [])), k in set(rows_b[i].get("kp_hits", [])))
+          for i in both for k in rows_a[i].get("_all_ids", [])]
+    out = {"task": task, "papers": len(both), "judges": [a, b],
+           "key_points": {"n": len(kp), "agree": round(sum(x == y for x, y in kp) / len(kp), 3) if kp else None,
+                          "kappa": _kappa(kp)},
+           "precision": {a: ra["summary"]["precision"], b: rb["summary"]["precision"]},
+           "core_coverage": {a: ra["summary"]["core_coverage"], b: rb["summary"]["core_coverage"]}}
+    if task != "summary":
+        fields = ["verdict"] + (["claim_type", "evidence_type", "hedging"] if task == "mentions"
+                                else ["strength_ok"])
+        for f in fields:
+            pairs = []
+            for i in both:
+                xa = {x.get("n"): x.get(f) for x in ja[i].get("claims") or []}
+                xb = {x.get("n"): x.get(f) for x in jb[i].get("claims") or []}
+                pairs += [(xa[n], xb[n]) for n in sorted(set(xa) & set(xb), key=str)]
+            out[f] = {"n": len(pairs), "agree": round(sum(x == y for x, y in pairs) / len(pairs), 3)
+                      if pairs else None, "kappa": _kappa(pairs),
+                      "confusion": dict(Counter(f"{x}->{y}" for x, y in pairs if x != y))}
+    return out

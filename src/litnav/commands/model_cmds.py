@@ -34,13 +34,18 @@ def add(sub):
 
     p = sub.add_parser("paper-eval", help="evaluate models at whole-paper tasks (summary, extract) on open "
                        "papers, judged by Claude: pick, gold, run, push, baseline, judge, report")
-    p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report", "compare"],
-                   help="compare: --run-dir A --against B, item by item")
+    p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report", "compare",
+                                      "agree"],
+                   help="compare: --run-dir A --against B, item by item; agree: Claude's and Gemini's judgments "
+                        "of one run")
     p.add_argument("--eval", default="eval/paper-eval.jsonl")
     p.add_argument("--task", choices=["summary", "extract", "mentions"])
     p.add_argument("--run-dir", help="judge/report: the run folder (default: the newest for --task)")
     p.add_argument("-n", type=int, default=20, help="pick: how many papers")
-    p.add_argument("--judge-model", default="opus", help="gold/judge: Claude model (claude -p --model)")
+    p.add_argument("--judge-model", help="gold/judge: the judge's model (default opus for Claude, "
+                   "gemini-4-neon-high for Gemini)")
+    p.add_argument("--judge", choices=["claude", "gemini"], default="claude",
+                   help="judge/report: which judge (Gemini through the agy CLI; open papers only)")
     p.add_argument("--jobs", type=int, default=4, help="gold/judge: Claude calls at a time")
     p.add_argument("--no-submit", action="store_true")
     p.add_argument("--chars", type=int, help="run/push: characters of each paper the model reads "
@@ -343,7 +348,7 @@ def cmd_paper_eval(a):
         log(f"picked {len(rows)} open papers into {ev}; next: litnav paper-eval gold")
         return
     if a.action == "gold":
-        log(f"wrote key points for {P.gold(lib, ev, model=a.judge_model, jobs=a.jobs, log=log)} paper(s)")
+        log(f"wrote key points for {P.gold(lib, ev, model=a.judge_model or 'opus', jobs=a.jobs, log=log)} paper(s)")
         return
     if a.action == "baseline":
         log(f"existing summaries: {P.baseline(lib, ev)}")
@@ -371,12 +376,17 @@ def cmd_paper_eval(a):
         print(json.dumps(out, indent=1))
         return
     if a.action == "judge":
-        log(f"judged {P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, log=log)} output(s) in {rd}")
+        n = P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, judge_with=a.judge, log=log)
+        log(f"judged {n} output(s) in {rd} ({a.judge})")
         return
-    rep = P.report(lib, ev, rd)
-    (rd / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1))
+    if a.action == "agree":
+        print(json.dumps(P.agree(lib, ev, rd), indent=1))
+        return
+    rep = P.report(lib, ev, rd, a.judge)
+    name = "report.json" if a.judge == "claude" else f"report-{a.judge}.json"
+    (rd / name).write_text(json.dumps(rep, ensure_ascii=False, indent=1))
     print(json.dumps(rep["summary"], indent=1))
-    P.record(lib, rd, rep["summary"])
+    P.record(lib, rd, rep["summary"], judge_with=a.judge)
     log(f"recorded in {lib.root / 'eval' / 'runs.jsonl'}")
 
 
