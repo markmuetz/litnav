@@ -174,6 +174,8 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
     assert s["claim_type_accuracy"] == 0.5 and s["restated_as_shown"] == 1 and s["restated_total"] == 1
     assert s["claim_type_confusion"] == {"restated->shown": 1}
     assert s["hedging_accuracy"] == 0.5 and s["core_coverage"] == 1.0
+    assert s["calls"] == len(jobs) and s["calls_at_cap"] == 0
+    assert s["evidence_unknown"] == 0.0 and s["evidence_unknown_judge"] == 0.0
 
 
 def test_mention_groups_and_records():
@@ -198,3 +200,11 @@ def test_mention_groups_and_records():
     assert C._value({"value": "", "units": "", "low": "", "high": ""}) is None
     assert C.grounded("radiate from squall-\nlines", "Waves RADIATE   from squall-\n lines here")
     assert not C.grounded("", "anything")
+
+
+def test_mention_prompt_v2_rules():
+    from litnav import claims as C
+    assert "unknown" in C.EVIDENCE_TYPES and "don't guess" in C.SYSTEM
+    assert "own result compared with cited work is shown" in C.SYSTEM
+    assert "followed by a citation is restated" not in C.SYSTEM
+    assert C.schema(["a"])["properties"]["mentions"]["maxItems"] == C.MAX_ITEMS

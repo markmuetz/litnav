@@ -20,13 +20,15 @@ from __future__ import annotations
 import re
 import secrets
 
-PROMPT_VERSION = 1
-SCHEMA_VERSION = "0.1"          # v0 evidence_type and hedging values
+PROMPT_VERSION = 2              # v2: own results compared with cited work are shown; evidence unknown
+SCHEMA_VERSION = "0.2"          # v0 evidence_type and hedging values, plus unknown
+MAX_ITEMS = 40                  # mentions a call; report counts calls that hit it
 GROUP_CHARS = 20_000            # passages per call: fits a 32k-token context with room to think
 SKIP_KINDS = {"ack", "front"}   # not claims; the title and abstract go to every call anyway
 
 CLAIM_TYPES = ["shown", "restated", "assumed", "speculation"]
-EVIDENCE_TYPES = ["observations", "reanalysis", "les_crm", "km_scale", "parametrized_model", "theory", "mixed"]
+EVIDENCE_TYPES = ["observations", "reanalysis", "les_crm", "km_scale", "parametrized_model", "theory", "mixed",
+                  "unknown"]
 HEDGING = ["strong", "moderate", "weak"]
 SOURCES = ["text", "figure", "table"]
 
@@ -48,11 +50,13 @@ SYSTEM = (
     "- claim_type: shown (this paper's own results demonstrate it); restated (the paper attributes it "
     "to other work, usually with a citation, or states it as known background); assumed (a premise or "
     "method choice the paper takes as given); speculation (offered as a possibility or explanation "
-    "without support in this paper). A claim followed by a citation is restated, not shown.\n"
+    "without support in this paper). A claim the paper attributes to cited work is restated; the "
+    "paper's own result compared with cited work is shown.\n"
     "- evidence_type (provisional list): observations, reanalysis, les_crm (large-eddy or "
     "cloud-resolving, limited area), km_scale (convection-permitting regional or global), "
-    "parametrized_model (GCM or RCM with parametrized convection), theory, mixed. The evidence behind "
-    "the claim; for a restated claim, the cited work's if the passage says, otherwise the closest.\n"
+    "parametrized_model (GCM or RCM with parametrized convection), theory, mixed, unknown. The evidence "
+    "behind the claim (for a restated claim, the cited work's); unknown if the passages don't say: "
+    "don't guess.\n"
     "- experiment: the model, its resolution and the method, where the claim rests on one ('' if not).\n"
     "- conditions: the region, regime, period and resolution it holds for ('' where not stated).\n"
     "- hedging (provisional levels): strong (shows, demonstrates, is), moderate (suggests, indicates, "
@@ -62,7 +66,7 @@ SYSTEM = (
     "Reply with JSON only.")
 
 
-def schema(ids: list[str], max_items: int = 40) -> dict:
+def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
     s = {"type": "string"}
     return {"type": "object", "properties": {"mentions": {"type": "array", "maxItems": max_items, "items": {
         "type": "object", "properties": {

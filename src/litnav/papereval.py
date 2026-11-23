@@ -346,7 +346,7 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
                                                                        "items": {"type": "integer"}}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 1, "extract": 1, "mentions": 1}
+JUDGE_VERSION = {"summary": 1, "extract": 1, "mentions": 2}
 
 
 def _mention_line(n, m) -> str:
@@ -385,10 +385,11 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "   Then give the right labels, from the paper, whatever the model said:\n"
                 "   claim_type: shown (this paper's own results demonstrate it); restated (the paper attributes "
                 "it to other work, usually with a citation, or states it as known background); assumed (a "
-                "premise or method choice taken as given); speculation (offered without support here).\n"
+                "premise or method choice taken as given); speculation (offered without support here). The paper's "
+                "own result compared with cited work is shown.\n"
                 "   evidence_type: observations; reanalysis; les_crm (large-eddy or cloud-resolving, limited "
                 "area); km_scale (convection-permitting regional or global); parametrized_model (GCM or RCM); "
-                "theory; mixed.\n"
+                "theory; mixed; unknown (the paper doesn't say).\n"
                 "   hedging: strong (shows, demonstrates); moderate (suggests, indicates, likely); weak (may, "
                 "could, possibly): how firmly the paper states it.\n"
                 "   standalone: is the statement understandable without the paper?\n"
@@ -508,7 +509,7 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
         core = {k["id"] for k in kps if k.get("core")}
         text = lib.get(key).text()
         row = {"id": jid, "key": key, "ok": out is not None, "seconds": r.get("seconds"), "judged": jid in jud,
-               "paper_chars": len(text), "chars_sent": r["chars_sent"]}
+               "paper_chars": len(text), "chars_sent": r["chars_sent"], "calls": len(r["parts"])}
         if out is not None:
             grams = _ngrams(text)
             if task == "summary":
@@ -524,6 +525,9 @@ def report(lib, eval_path: Path, run_dir: Path) -> dict:
                 row["grounded"] = sum(claims.grounded(m.get("quote", ""), ctext.get(m.get("chunk"), ""))
                                       for m in ms)
                 row["passages_valid"] = sum(m.get("chunk") in ctext for m in ms)
+                row["calls_at_cap"] = sum(len((o or {}).get("mentions") or []) >= claims.MAX_ITEMS
+                                          for o in r["parts"])
+                row["evidence_unknown"] = sum(m.get("evidence_type") == "unknown" for m in ms)
                 row["model_labels"] = [{f: m.get(f) for f in ("claim_type", "evidence_type", "hedging")}
                                        for m in ms]
             else:
@@ -630,6 +634,11 @@ def summarize(task, rows) -> dict:
             s[f"{f}_accuracy_ci"] = evalstats.bootstrap_ratio(
                 [(sum(a == b for a, b in r.get(f"{f}_pairs", [])), len(r.get(f"{f}_pairs", []))) for r in j])
             s[f"{f}_confusion"] = dict(Counter(f"{b}->{a}" for a, b in pairs if a != b))   # truth->model
+        s["calls"] = sum(r["calls"] for r in rows)
+        s["calls_at_cap"] = sum(r.get("calls_at_cap", 0) for r in rows)
+        s["evidence_unknown"] = round(sum(r.get("evidence_unknown", 0) for r in rows) / max(1, n), 3)
+        ev = [tuple(x) for r in j for x in r.get("evidence_type_pairs", [])]
+        s["evidence_unknown_judge"] = round(sum(b == "unknown" for _, b in ev) / len(ev), 3) if ev else None
         ct = [tuple(x) for r in j for x in r.get("claim_type_pairs", [])]
         s["restated_as_shown"] = sum(a == "shown" and b == "restated" for a, b in ct)
         s["restated_total"] = sum(b == "restated" for _, b in ct)
