@@ -89,3 +89,12 @@ def test_git_setup_reports_tracked_text_in_an_old_library(glib, capsys):
     assert "papers/smith2021cold/text.txt" in out and "filter-repo" in out
     assert cli.main(["-L", str(glib.root), "git-check", "--all"]) == 1
     assert "already runs" in G.install_hook(Library(glib.root))
+
+
+def test_model_jobs_and_replies_are_ignored(glib):
+    for p in ("derived/batches/b1/jobs.jsonl", "derived/paper-eval/r/results.jsonl", "derived/model-eval/r/x.jsonl"):
+        f = glib.root / p
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("paper text")
+    git(glib.root, "add", "-A")
+    assert not [p for p in G.staged(glib.root) if p.startswith("derived/")]

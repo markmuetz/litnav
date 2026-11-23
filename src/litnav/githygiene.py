@@ -8,7 +8,9 @@ repo, and once it is in the history it is hard to remove. So:
   every `papers/*/text.txt` out of git: a block litnav manages in
   .gitignore. The text is regenerated from the PDFs by `litnav extract`.
 - Figure crops from papers (`notes/figs/<key>_fig*`) are never tracked
-  unless the paper is open.
+  unless the paper is open, and nor are model jobs and replies under
+  derived/ (batches, evals, verify and ask-local logs), which hold paper
+  text and quotes.
 - A pre-commit hook (`litnav git-setup` installs it; `litnav init` does too)
   runs `litnav git-check`, which refuses a commit that adds any of these, or
   a paper's PDF, whatever .gitignore says (`git add -f` would get past it).
@@ -26,7 +28,10 @@ from . import sharing as S
 BEGIN = "# >>> litnav: keep papers' text out of git (track_text = false; `litnav git-setup`)"
 END = "# <<< litnav"
 TEXT_RULES = ["papers/*/text.txt"]
-ALWAYS_RULES = ["notes/figs/*_fig*"]          # figure crops from papers
+ALWAYS_RULES = ["notes/figs/*_fig*",          # figure crops from papers
+                # model jobs and replies: they hold paper text and quotes
+                "derived/batches/", "derived/model-eval/", "derived/paper-eval/",
+                "derived/verify.jsonl", "derived/ask-local.jsonl"]
 HOOK_MARK = "# litnav git-check"
 
 _FIG = re.compile(r"^notes/figs/(?P<key>[^/]+?)_fig[^/]*$")
