@@ -46,6 +46,32 @@ open is yours to set; NC and ND licences are reported, not applied:
 open = ["by", "by-sa", "cc0", "publicdomain"]
 ```
 
+## Public abstracts
+
+An abstract the publisher shows to anyone is metadata, not the paper's text.
+`litnav abstracts` fetches it from OpenAlex, Semantic Scholar, Crossref or
+arXiv (and from the Springer Nature and Elsevier APIs when
+`SPRINGER_API_KEY` or `ELSEVIER_API_KEY` is set) into
+`papers/<key>/abstract.json`. It then goes where a summary may: agents see it
+for licensed papers too (`get_paper`'s `public_abstract`). To keep it back:
+
+```toml
+[abstracts]
+to_models = false
+```
+
+```sh
+litnav abstracts                 # every paper without abstract.json; --recheck to redo
+litnav abstracts --doi 10.x/y    # print any paper's abstract
+litnav abstracts KEY --from-html page.html   # from a page you saved yourself
+```
+
+Publisher sites are never fetched: they refuse automated requests. When no
+API has an abstract, open the page in a browser *without* institutional
+access (a private window, off campus and off the VPN), save it, and pass it
+with `--from-html`. Only the abstract is taken from the page, and only if the
+page's title matches the paper's.
+
 ## A local model
 
 Any OpenAI-compatible server works: Ollama, llama.cpp's `llama-server`, MLX,
