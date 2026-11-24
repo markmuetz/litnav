@@ -32,3 +32,21 @@ def test_graph(lib):
     assert b.sharing == "licensed" and b.meta["files"]["licence"] == "cc-by"
     con = index.connect(lib, readonly=True)
     assert [tuple(x) for x in con.execute("SELECT * FROM edges")] == [("a2020x", "b2020x")]
+
+
+def test_graph_opens_only_licences_on_the_owners_list(lib):
+    lib.create_item("a2020x", bibfor("a2020x", "10.1/a"))
+    lib.create_item("b2020x", bibfor("b2020x", "10.1/b"))
+    w = lambda i, lic: {"id": f"https://openalex.org/{i}", "referenced_works": [],
+                        "primary_location": {"license": lic}}
+    c = FakeClient({"doi:10.1/a": w("W1", "cc-by-nc-nd"), "doi:10.1/b": w("W2", "public-domain"),
+                    "filter": {"results": []}})
+    graph.build(lib, c, min_cites=2, log=lambda *a: None)
+    assert lib.get("a2020x").sharing == "licensed"          # NC-ND is not on the default list
+    assert lib.get("b2020x").sharing == "open"
+    p = lib.root / "library.toml"
+    p.write_text(p.read_text() + '\n[licences]\nopen = ["by", "by-nc-nd"]\n')
+    from litnav.library import Library
+    lib2 = Library(lib.root)
+    graph.build(lib2, c, min_cites=2, log=lambda *a: None)
+    assert lib2.get("a2020x").sharing == "open"

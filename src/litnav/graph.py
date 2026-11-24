@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from . import index
+from . import index, licences
 from . import sharing as S
 from .sources import openalex
 from .util import atomic_write
@@ -24,6 +24,7 @@ def short(oa_id: str) -> str:
 
 
 def build(lib, client, *, min_cites: int = 3, log=print) -> dict:
+    opens = licences.open_codes(lib)       # the owner's list, as `litnav licences` uses
     items = [it for it in lib.items(S.LOOKUP) if it.doi]
     works, refs_of = {}, {}
     for n, it in enumerate(items, 1):
@@ -45,8 +46,9 @@ def build(lib, client, *, min_cites: int = 3, log=print) -> dict:
         # Only the publisher's version's licence may open an item up, and only
         # an item still at the default `licensed` level (never a level the
         # user chose, nor a stricter library default). The source is recorded.
-        if ("sharing" not in it.meta and it.sharing == "licensed"
-                and openalex.cc_licence(w, primary_only=True)):
+        prim = openalex.cc_licence(w, primary_only=True)
+        if ("sharing" not in it.meta and it.sharing == "licensed" and prim
+                and licences.from_openalex(prim) in opens):
             it.meta["sharing"] = "open"
             it.meta.setdefault("files", {})["sharing_source"] = "openalex-cc"
             changed = True

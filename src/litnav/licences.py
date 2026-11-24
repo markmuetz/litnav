@@ -59,6 +59,12 @@ def best(msg: dict, today: dt.date | None = None) -> tuple[str, str] | None:
     return None
 
 
+def from_openalex(lic: str) -> str:
+    """OpenAlex's licence names ('cc-by-nc-nd', 'public-domain') as codes here."""
+    lic = (lic or "").lower()
+    return "publicdomain" if lic == "public-domain" else lic.removeprefix("cc-")
+
+
 def open_codes(lib) -> set[str]:
     return set(lib.config.get("licences", {}).get("open", DEFAULT_OPEN))
 
