@@ -184,8 +184,12 @@ def cmd_field_build(a):
     from .. import field
     from ..net import Client
     lib = Library.find(a.library)
-    r = field.build_backward(lib, Client.for_library(lib), min_cites=a.min_cites,
-                             log=lambda m: print(m, file=sys.stderr))
+    try:
+        r = field.build_backward(lib, Client.for_library(lib), min_cites=a.min_cites,
+                                 log=lambda m: print(m, file=sys.stderr))
+    except field.Interrupted as e:
+        print(f"stopped: {e}", file=sys.stderr)
+        return 1
     print(json.dumps(r))
 
 
@@ -280,7 +284,11 @@ def cmd_field_forward(a):
     from .. import field
     from ..net import Client
     lib = Library.find(a.library)
-    r = field.build_forward(lib, Client.for_library(lib), since=a.since, min_lib=a.min_lib,
-                            max_seed_cites=a.max_seed_cites, max_works=a.max_works,
-                            log=lambda m: print(m, file=sys.stderr))
+    try:
+        r = field.build_forward(lib, Client.for_library(lib), since=a.since, min_lib=a.min_lib,
+                                max_seed_cites=a.max_seed_cites, max_works=a.max_works,
+                                log=lambda m: print(m, file=sys.stderr))
+    except field.Interrupted as e:
+        print(f"stopped: {e}", file=sys.stderr)
+        return 1
     print(json.dumps(r))

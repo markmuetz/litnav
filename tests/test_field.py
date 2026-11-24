@@ -179,3 +179,28 @@ def test_mcp_search_field_marks_held_and_hides_confidential(lib):
     assert all("doe2026" not in json.dumps(x) for x in r["results"])
     assert all(x["kind"] == "research" for x in t.search_field("ozone", k=3, kind="research")["results"]
                if "kind" in x)
+
+
+def test_forward_stops_on_a_network_failure_and_writes_nothing(lib, capsys):
+    con = field.connect(lib)
+    with con:
+        for i, k in (("W1", "a2020x"), ("W2", "b2020x")):
+            con.execute("INSERT INTO library VALUES (?,?,'','','')", (i, k))
+    con.close()
+    c = FakeClient({
+        "openalex:W1|W2": {"results": [{"id": "https://openalex.org/W1", "cited_by_count": 10},
+                                       {"id": "https://openalex.org/W2", "cited_by_count": 10}]},
+        "cites:W1,": {"meta": {"next_cursor": None}, "results": [{"id": "https://openalex.org/W50"}]},
+        # no route for cites:W2: the fake raises NetError, as an offline client does
+    })
+    import pytest
+    with pytest.raises(field.Interrupted, match="seed 2 of 2"):
+        field.build_forward(lib, c, min_lib=1, log=lambda *x: None)
+    assert field.connect(lib).execute("SELECT count(*) FROM works").fetchone()[0] == 0
+    import litnav.net as N
+    monkey = {"get_json": lambda *a, **k: (_ for _ in ()).throw(N.NetError("no network"))}
+    class Down:
+        def get_json(self, *a, **k):
+            return monkey["get_json"]()
+    with pytest.raises(field.Interrupted, match="batch 1 of 1"):
+        field.fetch(Down(), ["W1"])

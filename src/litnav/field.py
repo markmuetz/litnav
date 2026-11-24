@@ -113,6 +113,17 @@ def _topic(w: dict) -> tuple[str, str, str]:
             (t.get("field") or {}).get("display_name") or "")
 
 
+class Interrupted(RuntimeError):
+    """A request failed (no network, or OpenAlex refused): the run stops, and
+    writes nothing, rather than carry on with part of the data. Pages fetched
+    so far are in the HTTP cache, so a rerun picks up where this one stopped."""
+
+
+def _stop(e, where: str):
+    raise Interrupted(f"{where}: {e}. Nothing was written; rerun when the network is back "
+                      "(pages fetched so far are cached, so it resumes quickly)") from None
+
+
 def fetch(client, ids: list[str], select: str = SELECT) -> list[dict]:
     out = []
     for i in range(0, len(ids), 50):
@@ -120,8 +131,8 @@ def fetch(client, ids: list[str], select: str = SELECT) -> list[dict]:
         try:
             d = client.get_json(openalex.API, purpose=LOOKUP, params={
                 "filter": "openalex:" + "|".join(chunk), "per-page": 50, "select": select})
-        except NetError:
-            continue
+        except NetError as e:
+            _stop(e, f"OpenAlex batch {i // 50 + 1} of {(len(ids) + 49) // 50}")
         out.extend(d.get("results", []))
     return out
 
@@ -233,8 +244,8 @@ def build_forward(lib, client, *, since: int = 2000, min_lib: int = 5, max_seed_
                 d = client.get_json(openalex.API, purpose=LOOKUP, params={
                     "filter": f"cites:{sid},from_publication_date:{since}-01-01",
                     "per-page": 200, "select": "id", "cursor": cursor})
-            except NetError:
-                break
+            except NetError as e:
+                _stop(e, f"seed {n} of {len(seeds)} ({sid})")
             for r in d.get("results", []):
                 cid = _short(r["id"])
                 wsum[cid] += w
