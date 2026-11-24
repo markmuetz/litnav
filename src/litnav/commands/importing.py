@@ -95,7 +95,11 @@ def cmd_import(a):
     from collections import Counter
     print("  " + "  ".join(f"{k}={v}" for k, v in Counter(r["status"] for r in rows).most_common()),
           file=sys.stderr)
-    if any(r["status"] == "no-match" for r in rows):
+    for r in rows:
+        if r["status"] == "no-match" and r.get("arxiv"):
+            print(f"no-match: {r['file']} has arXiv id {r['arxiv']}, but the arXiv API did not "
+                  "answer (export.arxiv.org); try again later", file=sys.stderr)
+    if any(r["status"] == "no-match" and not r.get("arxiv") for r in rows):
         print("no-match: no DOI, arXiv id or title match. If the paper has none yet (an accepted "
               "manuscript, a report), import it by name with its metadata: litnav import FILE "
               "--title T --author 'Family, Given' [--author ...] --year Y [--journal J]",

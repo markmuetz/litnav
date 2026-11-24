@@ -195,3 +195,16 @@ def test_cli_no_match_suggests_metadata_by_hand(lib, pdfs, monkeypatch, capsys):
                      "--year", "2026", "--apply"]) == 0
     it = lib.get("example2026tracers")
     assert it.entry.type == "misc" and "Sample, Carl" in it.entry.get("author")
+
+
+def test_arxiv_id_found_but_api_down_says_so(lib, pdfs, monkeypatch, capsys):
+    from litnav import cli
+    from litnav.identify import identify
+    f = pdfs("2501.01234v1.pdf", "A preprint with no DOI in its first pages.")
+    p = identify(f, FakeClient({}), lambda k: False, cfg=lib.config)
+    assert p.status == "no-match" and p.arxiv == "2501.01234"
+    monkeypatch.setattr(importer.Client, "for_library", classmethod(lambda cls, lib: FakeClient({})))
+    assert cli.main(["-L", str(lib.root), "import", str(f)]) == 0
+    err = capsys.readouterr().err
+    assert "arXiv id 2501.01234" in err and "did not answer" in err
+    assert "--title T --author" not in err

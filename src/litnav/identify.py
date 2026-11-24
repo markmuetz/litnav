@@ -109,6 +109,7 @@ def identify(pdf: Path, client, exists, *, cfg: dict, doi: str | None = None,
                 break
     if msg is None and ams_doi(pdf.stem):
         msg, how = crossref.work(client, ams_doi(pdf.stem)), "amsname"
+    aid = None
     if msg is None:
         aid = arxiv.find_id(text, pdf.stem)
         if aid:
@@ -126,6 +127,7 @@ def identify(pdf: Path, client, exists, *, cfg: dict, doi: str | None = None,
     p.via = via + how
     if msg is None and rec is None:
         p.status = "no-match"
+        p.arxiv = aid or ""      # found but the arXiv API did not answer: say so
         return p
     if rec is not None:
         p.title, p.year, p.arxiv = rec["title"], rec["year"], rec["id"]
