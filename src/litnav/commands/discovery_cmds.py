@@ -32,7 +32,14 @@ def add(sub):
     q = s.add_parser("build", help="fetch the backward set: works cited by several library papers")
     q.add_argument("--min-cites", type=int, default=3)
     q.set_defaults(func=cmd_field_build)
+    q = s.add_parser("forward", help="fetch the forward set: works citing many library papers")
+    q.add_argument("--since", type=int, default=2000)
+    q.add_argument("--min-lib", type=int, default=5, help="cites at least this many library papers")
+    q.add_argument("--max-seed-cites", type=int, default=2000)
+    q.add_argument("--max-works", type=int, default=20000)
+    q.set_defaults(func=cmd_field_forward)
     q = s.add_parser("list", help="top field works by score (default: research papers)")
+    q.add_argument("--set", dest="set_", choices=["backward", "forward"])
     q.add_argument("--kind", default="research",
                    help="research, review, dataset, model, project, or all")
     q.add_argument("--limit", "-k", type=int, default=30)
@@ -62,7 +69,8 @@ def add(sub):
         q.add_argument("ids", nargs="+", help="OpenAlex ids (W...) or DOIs")
         q.add_argument("--note", default="")
         q.set_defaults(func=cmd_field_decide, status=name)
-    p.set_defaults(func=cmd_field_list, kind="research", limit=30, decided=False, json=False)
+    p.set_defaults(func=cmd_field_list, kind="research", limit=30, decided=False, json=False,
+                   set_=None)
 
     p = sub.add_parser("to-fetch", help="the list of papers to get: list, add, skip, open, prune")
     s = p.add_subparsers(dest="tf", metavar="<action>")
@@ -185,14 +193,15 @@ def cmd_field_list(a):
     from .. import field
     lib = Library.find(a.library)
     rows = field.listing(lib, kind=None if a.kind == "all" else a.kind, n=a.limit,
-                         show_decided=a.decided)
+                         show_decided=a.decided, set_=getattr(a, "set_", None))
     if a.json:
         print(json.dumps(rows, indent=1))
         return
     for r in rows:
         held = f"  [maybe held: {r['maybe_held']}]" if r["maybe_held"] else ""
         ab = "" if r["abstract"] else "  (no abstract)"
-        print(f"{r['score']:6.2f}  {r['library_citers']:3d} lib  {r['cited_by_count'] or 0:6d} cites  "
+        print(f"{r['total']:6.2f}  {r['library_citers']:3d}<lib {r['cites_library'] or 0:3d}>lib  "
+              f"{r['cited_by_count'] or 0:6d} cites  "
               f"{r['id']}  {r['year']} {r['first_author'][:22]}: {r['title'][:80]}{held}{ab}")
 
 
@@ -263,3 +272,15 @@ def cmd_field_map(a):
         print(f"{c['held_share']:4.0%} held  {c['field_works']:4d} field  {c['held']:4d} lib  "
               f"#{c['cluster']:<3d} {', '.join(c['terms'][:6])}")
     print(f"written to {p}", file=sys.stderr)
+
+
+def cmd_field_forward(a):
+    import sys
+
+    from .. import field
+    from ..net import Client
+    lib = Library.find(a.library)
+    r = field.build_forward(lib, Client.for_library(lib), since=a.since, min_lib=a.min_lib,
+                            max_seed_cites=a.max_seed_cites, max_works=a.max_works,
+                            log=lambda m: print(m, file=sys.stderr))
+    print(json.dumps(r))

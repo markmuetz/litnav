@@ -80,6 +80,9 @@ def connect(lib) -> sqlite3.Connection:
     con = sqlite3.connect(p)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(works)")}
+    if "fscore" not in cols:                       # forward score, added with the forward set
+        con.execute("ALTER TABLE works ADD COLUMN fscore REAL DEFAULT 0")
     return con
 
 
@@ -170,14 +173,21 @@ def build_backward(lib, client, *, min_cites: int = 3, log=print) -> dict:
             venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
             ab = clean(from_inverted(w.get("abstract_inverted_index")))[:MAX_LEN]
             pct = (w.get("citation_normalized_percentile") or {}).get("value")
+            old = con.execute("SELECT sets, fscore, cites_library FROM works WHERE id=?",
+                              (wid,)).fetchone()
+            fwd = bool(old and "forward" in (old["sets"] or ""))
             row = (wid, (w.get("doi") or "").replace("https://doi.org/", "").lower(),
                    w.get("title") or "", w.get("publication_year"), au, venue, w.get("type") or "",
-                   kind_of(w), ab, w.get("cited_by_count"), pct, *_topic(w), "backward",
-                   c.get("cited_by_library", 0), 0,
+                   kind_of(w), ab, w.get("cited_by_count"), pct, *_topic(w),
+                   "backward,forward" if fwd else "backward",
+                   c.get("cited_by_library", 0), old["cites_library"] if fwd else 0,
                    score(c.get("cited_by_library", 0), w.get("cited_by_count")),
-                   maybe.get(wid, ""), today)
-            con.execute("INSERT OR REPLACE INTO works VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                   maybe.get(wid, ""), today, old["fscore"] if fwd else 0.0)
+            con.execute(
+                "INSERT OR REPLACE INTO works (id, doi, title, year, first_author, venue, type, "
+                "kind, abstract, cited_by_count, percentile, topic, subfield, field, sets, "
+                "library_citers, cites_library, score, maybe_held, fetched, fscore) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
             for r in w.get("referenced_works") or []:
                 r = _short(r)
                 if r in field_ids or r in lib_ids:
@@ -196,12 +206,109 @@ def build_backward(lib, client, *, min_cites: int = 3, log=print) -> dict:
             "with_abstract": sum(r[1] or 0 for r in n)}
 
 
+def weight(cited_by_count: int | None) -> float:
+    """What citing one library paper is worth: less for papers everyone cites."""
+    return 1 / math.log10(10 + (cited_by_count or 0))
+
+
+def build_forward(lib, client, *, since: int = 2000, min_lib: int = 5, max_seed_cites: int = 2000,
+                  max_works: int = 20000, log=print) -> dict:
+    """Works since `since` that cite at least `min_lib` library papers, scored by
+    the weights of the library papers they cite. Seeds cited more than
+    `max_seed_cites` times are left out: everyone cites them, so they say
+    little, and they would cost most of the requests."""
+    con = connect(lib)
+    lib_ids = dict(con.execute("SELECT id, key FROM library WHERE key<>''").fetchall())
+    if not lib_ids:
+        raise ValueError("no library works in the field store: run `litnav field build` first")
+    cc = {_short(w["id"]): w.get("cited_by_count") or 0
+          for w in fetch(client, list(lib_ids), select="id,cited_by_count")}
+    seeds = [i for i in lib_ids if cc.get(i, 0) and cc[i] <= max_seed_cites]
+    log(f"forward: {len(seeds)} seeds (of {len(lib_ids)}); citing works since {since}")
+    wsum, count = Counter(), Counter()
+    for n, sid in enumerate(seeds, 1):
+        cursor, w = "*", weight(cc[sid])
+        while cursor:
+            try:
+                d = client.get_json(openalex.API, purpose=LOOKUP, params={
+                    "filter": f"cites:{sid},from_publication_date:{since}-01-01",
+                    "per-page": 200, "select": "id", "cursor": cursor})
+            except NetError:
+                break
+            for r in d.get("results", []):
+                cid = _short(r["id"])
+                wsum[cid] += w
+                count[cid] += 1
+            cursor = (d.get("meta") or {}).get("next_cursor") if d.get("results") else None
+        if n % 50 == 0:
+            log(f"  {n}/{len(seeds)} seeds; {len(count)} citing works so far")
+    h = D.Holdings(lib)
+    cand = [c for c, k in count.items() if k >= min_lib and c not in lib_ids]
+    cand.sort(key=lambda c: -wsum[c])
+    cand = cand[:max_works]
+    have = {r["id"]: r["sets"] for r in con.execute("SELECT id, sets FROM works")}
+    log(f"  {sum(1 for k in count.values() if k >= min_lib)} cite >= {min_lib} library papers; "
+        f"fetching {sum(1 for c in cand if c not in have)} new")
+    today = dt.date.today().isoformat()
+    fetched = {}
+    for w in fetch(client, [c for c in cand if c not in have]):
+        fetched[_short(w["id"])] = w
+    field_ids = set(have) | set(cand)
+    held = 0
+    with con:
+        for cid in cand:
+            fs = round(wsum[cid], 3)
+            if cid in have:
+                sets = have[cid] if "forward" in have[cid] else have[cid] + ",forward"
+                con.execute("UPDATE works SET fscore=?, cites_library=?, sets=? WHERE id=?",
+                            (fs, count[cid], sets, cid))
+                continue
+            w = fetched.get(cid)
+            if not w:
+                continue
+            au = (w.get("authorships") or [{}])[0].get("author", {}).get("display_name", "")
+            st, k = h.status(w.get("doi") or "", w.get("title") or "", au, w.get("publication_year"))
+            if st == "held":
+                held += 1
+                continue
+            venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
+            ab = clean(from_inverted(w.get("abstract_inverted_index")))[:MAX_LEN]
+            pct = (w.get("citation_normalized_percentile") or {}).get("value")
+            con.execute(
+                "INSERT OR REPLACE INTO works (id, doi, title, year, first_author, venue, type, kind, "
+                "abstract, cited_by_count, percentile, topic, subfield, field, sets, library_citers, "
+                "cites_library, score, maybe_held, fetched, fscore) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, (w.get("doi") or "").replace("https://doi.org/", "").lower(),
+                 w.get("title") or "", w.get("publication_year"), au, venue, w.get("type") or "",
+                 kind_of(w), ab, w.get("cited_by_count"), pct, *_topic(w), "forward", 0,
+                 count[cid], 0.0, k if st == "maybe" else "", today, fs))
+            for r in w.get("referenced_works") or []:
+                r = _short(r)
+                if r in field_ids or r in lib_ids:
+                    con.execute("INSERT OR IGNORE INTO links VALUES (?,?)", (cid, r))
+    n = con.execute("SELECT count(*), sum(abstract<>'') FROM works WHERE sets LIKE '%forward%'"
+                    ).fetchone()
+    con.close()
+    return {"seeds": len(seeds), "citing_works": len(count), "kept": n[0],
+            "with_abstract": n[1] or 0, "held": held}
+
+
 # ---- views
 
-def listing(lib, *, kind: str | None = None, n: int = 30, show_decided: bool = False) -> list[dict]:
+def listing(lib, *, kind: str | None = None, n: int = 30, show_decided: bool = False,
+            set_: str | None = None) -> list[dict]:
     con = connect(lib)
-    q = "SELECT * FROM works" + (" WHERE kind=?" if kind else "") + " ORDER BY score DESC"
-    rows = [dict(r) for r in con.execute(q, (kind,) if kind else ())]
+    where, args = [], []
+    if kind:
+        where.append("kind=?")
+        args.append(kind)
+    if set_:
+        where.append("sets LIKE ?")
+        args.append(f"%{set_}%")
+    q = ("SELECT *, score + coalesce(fscore, 0) AS total FROM works" +
+         (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY total DESC")
+    rows = [dict(r) for r in con.execute(q, args)]
     con.close()
     dec = {r["id"]: r["status"] for r in decisions(lib)}
     if not show_decided:

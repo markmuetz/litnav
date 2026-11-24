@@ -135,3 +135,32 @@ def test_embed_search_and_map(lib):
     assert cl[0]["held_share"] == 0                           # least held first
     assert "ozone" in by[("W20", "W21")]["terms"]
     assert "# The field around the library" in field.map_markdown(cl)
+
+
+def test_forward_counts_weighted_citations(lib):
+    con = field.connect(lib)
+    with con:
+        for i, k in (("W1", "a2020x"), ("W2", "b2020x"), ("W3", "c2020x")):
+            con.execute("INSERT INTO library VALUES (?,?,'','','')", (i, k))
+    con.close()
+    def page(ids):
+        return {"meta": {"next_cursor": None}, "results": [{"id": f"https://openalex.org/{i}"} for i in ids]}
+    topic = {"display_name": "T", "subfield": {"display_name": "S"}, "field": {"display_name": "F"}}
+    c = FakeClient({
+        "openalex:W1|W2|W3": {"results": [
+            {"id": "https://openalex.org/W1", "cited_by_count": 10},
+            {"id": "https://openalex.org/W2", "cited_by_count": 10},
+            {"id": "https://openalex.org/W3", "cited_by_count": 50000}]},       # too cited: no seed
+        "cites:W1,": page(["W50", "W51"]),
+        "cites:W2,": page(["W50"]),
+        "openalex:W50\"": {"results": [{"id": "https://openalex.org/W50", "title": "Recent work",
+                                        "publication_year": 2022, "abstract_inverted_index": inv(ABS),
+                                        "primary_topic": topic, "referenced_works":
+                                        ["https://openalex.org/W1", "https://openalex.org/W2"]}]},
+    })
+    r = field.build_forward(lib, c, min_lib=2, log=lambda *x: None)
+    assert r["seeds"] == 2 and r["kept"] == 1 and not any("cites:W3" in u for u in c.calls)
+    w = field.listing(lib, set_="forward")[0]
+    assert w["id"] == "W50" and w["cites_library"] == 2 and w["fscore"] > 0
+    con = field.connect(lib)
+    assert {tuple(x) for x in con.execute("SELECT * FROM links")} == {("W50", "W1"), ("W50", "W2")}
