@@ -120,3 +120,17 @@ def test_interrupted_batch_resumes_and_eval_imports(ilib, remote, tmp_path):
     from pathlib import Path
     rep = modeleval.report(lib, ev, Path(rd))
     assert rep["summary"]["by_variant"]["A"]["n"] == 1 and rep["summary"]["by_variant"]["B"]["ok"] == 1
+
+
+def test_a_model_profile_has_its_own_spool(ilib, monkeypatch):
+    """-M gpt-oss pushes to gpt-oss's spool, so the 235B worker never takes its batches."""
+    from litnav import spool
+    configure(ilib)
+    ilib.config["batch_remote"]["profiles"] = {"gpt-oss": {"spool": "~/spool-gpt-oss", "job_name": "llm-gpt-oss"}}
+    monkeypatch.delenv("LITNAV_MODEL_PROFILE", raising=False)
+    assert spool.remote_cfg(ilib)["spool"] == "~/litnav-spool" and "profiles" not in spool.remote_cfg(ilib)
+    monkeypatch.setenv("LITNAV_MODEL_PROFILE", "gpt-oss")
+    c = spool.remote_cfg(ilib)
+    assert c["spool"] == "~/spool-gpt-oss" and c["host"] == "cluster" and c["job_name"] == "llm-gpt-oss"
+    monkeypatch.setenv("LITNAV_MODEL_PROFILE", "orchid")              # a profile with no spool of its own
+    assert spool.remote_cfg(ilib)["spool"] == "~/litnav-spool"

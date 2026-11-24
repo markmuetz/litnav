@@ -362,8 +362,9 @@ def cmd_paper_eval(a):
         log(f"done: {P.run(lib, ev, a.task, rd, chars=a.chars, log=log)}")
         return
     if a.action == "push":
-        m = lib.config.get("batch_remote", {}).get("job_name", "batch")
-        r = P.push(lib, ev, a.task, model_hint="batch", chars=a.chars, submit=not a.no_submit, log=log)
+        from .. import spool
+        hint = spool.remote_cfg(lib).get("profile") or "batch"     # -M gpt-oss: its own spool and run name
+        r = P.push(lib, ev, a.task, model_hint=hint, chars=a.chars, submit=not a.no_submit, log=log)
         log(f"pushed batch {r['batch']}; `litnav queue pull` brings it back")
         return
     rd = Path(a.run_dir) if a.run_dir else max((lib.root / "derived" / "paper-eval").glob(f"{a.task}-*"),

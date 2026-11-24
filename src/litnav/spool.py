@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -40,7 +41,15 @@ class RemoteError(RuntimeError):
 
 
 def remote_cfg(lib) -> dict:
+    """[batch_remote], with [batch_remote.profiles.NAME] laid over it when model
+    profile NAME is chosen (-M NAME): a spool, worker and submit command per
+    model, so a worker only takes batches meant for the model it serves."""
     c = dict(lib.config.get("batch_remote", {}))
+    profiles = c.pop("profiles", {}) or {}
+    name = lib.model_profile or os.environ.get("LITNAV_MODEL_PROFILE") or \
+        (lib.config.get("local_model") or {}).get("profile")
+    if name and name in profiles:
+        c = {**c, **profiles[name], "profile": name}
     if not c.get("host") or not c.get("spool"):
         raise ValueError("set [batch_remote] host and spool in .litnav/local.toml "
                          "(see `litnav queue push --help`)")

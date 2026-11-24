@@ -38,7 +38,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import batch_runner, claims, derived, evalstats, localmodel
+from . import batch_runner, claims, copyfix, derived, evalstats, localmodel
 from . import sharing as S
 
 PROMPT_VERSION = {"summary": derived.PROMPT_VERSION, "extract": 1, "mentions": claims.PROMPT_VERSION,
@@ -292,7 +292,7 @@ def reask_jobs(lib, run_dir: Path, task: str) -> list[dict]:
         else:
             bad = claims.copied(it, o)
             if bad:
-                out.append(claims.rephrase_job(j, o, bad))
+                out.append(claims.rephrase_job(copyfix.fill(j, res), o, bad))
     if task == "mentions":                  # phase 2: check each usable rewrite's meaning
         rjobs = {r["id"]: r for r in load(run_dir / "reask.jsonl")} if (run_dir / "reask.jsonl").exists() else {}
         for j in load(run_dir / "jobs.jsonl"):
@@ -303,6 +303,7 @@ def reask_jobs(lib, run_dir: Path, task: str) -> list[dict]:
             asked = (rjobs.get(rid) or {}).get("rewrite") or again.get("rewrite")
             if not asked or "rewrites" not in again["output"]:
                 continue                      # an old whole-reply re-ask: nothing to check
+            j = copyfix.fill(j, res)
             cand = claims.candidate_rewrites(first.get("output"), again["output"], asked)
             still = {b["n"] for b in claims.copied(lib.get(j["key"]), {"mentions": [
                 {"statement": cand.get(n, "")} for n in range(1, max(cand, default=0) + 1)]}) if b["n"] in cand}
@@ -472,18 +473,24 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
         "note": {"type": "string"}},
         "required": ["n", "verdict", "claim_type", "evidence_type", "hedging", "standalone", "note"]}},
     "key_points_covered": {"type": "object", "additionalProperties": {"type": "array",
-                                                                       "items": {"type": "integer"}}}},
+                                                                       "items": {"type": "integer"}}},
+    "runs": {"type": "array", "items": {"type": "object", "properties": {
+        "n": {"type": "integer"}, "verdict": {"type": "string", "enum": ["correct", "wrong_detail", "not_in_paper"]},
+        "wrong": {"type": "array", "items": {"type": "string"}}, "note": {"type": "string"}},
+        "required": ["n", "verdict", "wrong", "note"]}},
+    "runs_missed": {"type": "array", "items": {"type": "string"}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 3}   # summary 2: key items too
+JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 4}   # mentions 4: grades the runs table (v4) too
 
 
-def _mention_line(n, m) -> str:
+def _mention_line(n, m, runs=None) -> str:
     c = m.get("conditions") or {}
     e = m.get("experiment") or {}
     v = m.get("value") or {}
     bits = [f"chunk {m.get('chunk')}", f"source {m.get('source')}", f"claim_type {m.get('claim_type')}",
-            f"evidence_type {claims.evidence_type(m) if 'evidence' in m else m.get('evidence_type')}",
+            f"evidence_type {claims.evidence_type(m, runs) if 'evidence' in m else m.get('evidence_type')}",
+            *([f"run '{m['run']}'"] if m.get("run") else []),
             f"hedging {m.get('hedging')}" + (f" ('{m['hedge_words']}')" if m.get("hedge_words") else "")]
     cond = "; ".join(f"{k} {x}" for k, x in {**e, **c}.items() if x and k not in ("run_name",))
     if cond:
@@ -519,8 +526,17 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "together.\n"
                 "5. keywords_ok: are the keywords topical and lower-case?\n")
     elif task == "mentions":
-        lines = "\n".join(_mention_line(n, m) for n, m in enumerate(out.get("mentions") or [], 1))
-        body = (f"Model's extracted claims (mentions), each with its labels:\n{lines}\n\n"
+        runs = out.get("runs")
+        lines = "\n".join(_mention_line(n, m, runs) for n, m in enumerate(out.get("mentions") or [], 1))
+        rt = ""
+        if runs is not None:
+            rt = ("Model's runs table (the paper's model runs, scheme by scheme):\n"
+                  + "\n".join(f"R{n}. {json.dumps({k: v for k, v in r.items() if k != 'components'}, ensure_ascii=False)}"
+                               f" components: " + "; ".join(
+                                   f"{c.get('kind')}={c.get('state')}" + (f" ({c['scheme']})" if c.get("scheme") else "")
+                                   for c in r.get("components") or [])
+                               for n, r in enumerate(runs, 1)) + "\n\n")
+        body = (rt + f"Model's extracted claims (mentions), each with its labels:\n{lines}\n\n"
                 "1. For each claim n give a verdict on its statement: correct; wrong_detail (a number, unit, "
                 "direction, method or condition differs from the paper); overstated (stronger or more general "
                 "than the paper); not_in_paper; trivial (true but says nothing useful). A claim the paper "
@@ -538,7 +554,13 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "could, possibly): how firmly the paper states it.\n"
                 "   standalone: is the statement understandable without the paper?\n"
                 "2. key_points_covered: for each key point id, the numbers of the claims that convey it "
-                "(an empty list if none).\n")
+                "(an empty list if none).\n"
+                + ("3. runs: for each run Rn of the runs table: verdict correct (every field and component "
+                   "matches the paper), wrong_detail (some differ: list them in wrong, e.g. "
+                   "'horizontal_grid_spacing', 'microphysics.scheme', 'deep_convection.state'), or "
+                   "not_in_paper (no such run). A component the paper doesn't describe is right as "
+                   "not_stated. runs_missed: the names of runs the paper itself makes that the table leaves "
+                   "out (an empty list if none).\n" if runs is not None else ""))
     else:
         listing = "\n".join(f"{n}. {c.get('claim')} [kind {c.get('kind')}; strength {c.get('strength')}; "
                            f"conditions: {c.get('conditions') or '-'}]"
@@ -584,6 +606,16 @@ def paper_results(run_dir: Path, task: str) -> dict:
                      + (chk.get("seconds") or 0)}
         r = again if again.get("ok") and isinstance(again.get("output"), dict) else first
         pid = f"{task}-{j['key']}" if task == "mentions" else j["id"]
+        if j.get("role") == "runs":               # the paper's runs table (v4), not a group of mentions
+            p = out.setdefault(pid, {"id": pid, "key": j["key"], "ok": True, "seconds": 0.0, "passages": [],
+                                     "chars_sent": 0, "parts": [], "first_parts": [], "reasked": 0,
+                                     "rewrites": {"asked": 0, "candidates": 0, "used": 0}})
+            o = first.get("output") if first.get("ok") and isinstance(first.get("output"), dict) else {}
+            p["runs"] = o.get("runs") or []
+            p["runs_ok"] = bool(first.get("ok"))
+            p["seconds"] = round(p["seconds"] + (first.get("seconds") or 0), 1)
+            p["chars_sent"] += j.get("chars_sent") or 0
+            continue
         p = out.setdefault(pid, {"id": pid, "key": j["key"], "ok": True, "seconds": 0.0, "passages": [],
                                  "chars_sent": 0, "parts": [], "first_parts": [], "reasked": 0,
                                  "rewrites": {"asked": 0, "candidates": 0, "used": 0}})
@@ -599,8 +631,8 @@ def paper_results(run_dir: Path, task: str) -> dict:
         p["parts"].append(r.get("output") if good else None)
     for p in out.values():
         if task == "mentions":
-            p["output"] = {"mentions": [m for o in p["parts"] if o for m in o.get("mentions") or []]} \
-                if p["ok"] else None
+            p["output"] = {"mentions": [m for o in p["parts"] if o for m in o.get("mentions") or []],
+                           **({"runs": p["runs"]} if "runs" in p else {})} if p["ok"] and p["parts"] else None
         else:
             p["output"] = p["parts"][0] if p["ok"] else None
         if not any(p["parts"]):
@@ -709,7 +741,8 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
                 row["passages_valid"] = sum(m.get("chunk") in ctext for m in ms)
                 row["calls_at_cap"] = sum(len((o or {}).get("mentions") or []) >= claims.MAX_ITEMS
                                           for o in r["parts"])
-                evs = [claims.evidence_type(m) if "evidence" in m else m.get("evidence_type") for m in ms]
+                evs = [claims.evidence_type(m, out.get("runs")) if "evidence" in m else m.get("evidence_type")
+                       for m in ms]
                 row["evidence_unknown"] = sum(e == "unknown" for e in evs)
                 row["model_labels"] = [{"claim_type": m.get("claim_type"), "evidence_type": e,
                                         "hedging": m.get("hedging")} for m, e in zip(ms, evs)]
@@ -749,6 +782,11 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
                     row[f"{f}_pairs"] = [[labels[x["n"] - 1][f], x.get(f)] for x in items or []
                                          if isinstance(x.get("n"), int) and 0 < x["n"] <= len(labels)]
                 row["standalone"] = sum(bool(x.get("standalone")) for x in items or [])
+                if "runs" in jd:                   # v4: the judge graded the runs table
+                    row["run_verdicts"] = dict(Counter(x.get("verdict") for x in jd.get("runs") or []))
+                    row["run_wrong_fields"] = dict(Counter(f
+                                                           for x in jd.get("runs") or [] for f in x.get("wrong") or []))
+                    row["runs_missed"] = len(jd.get("runs_missed") or [])
             if task == "extract":
                 row["strength_ok"] = sum(bool(x.get("strength_ok")) for x in items or [])
                 row["standalone"] = sum(bool(x.get("standalone")) for x in items or [])
@@ -869,6 +907,17 @@ def summarize(task, rows) -> dict:
         s["evidence_unknown"] = round(sum(r.get("evidence_unknown", 0) for r in rows) / max(1, n), 3)
         ev = [tuple(x) for r in j for x in r.get("evidence_type_pairs", [])]
         s["evidence_unknown_judge"] = round(sum(b == "unknown" for _, b in ev) / len(ev), 3) if ev else None
+        jr = [r for r in j if "run_verdicts" in r]
+        if jr:                                   # the runs table (v4)
+            tot = Counter()
+            for r in jr:
+                tot.update(r["run_verdicts"])
+            found = sum(tot.values())
+            s["runs"] = {"found": found, "per_paper": round(found / len(jr), 1),
+                         "correct": round(tot.get("correct", 0) / found, 3) if found else None,
+                         "verdicts": dict(tot), "missed": sum(r["runs_missed"] for r in jr),
+                         "wrong_fields": dict(sum((Counter(r["run_wrong_fields"]) for r in jr), Counter()).most_common(12))}
+            s["runs"]["recall"] = round(found / max(1, found + s["runs"]["missed"]), 3)
         ct = [tuple(x) for r in j for x in r.get("claim_type_pairs", [])]
         s["restated_as_shown"] = sum(a == "shown" and b == "restated" for a, b in ct)
         s["restated_total"] = sum(b == "restated" for _, b in ct)

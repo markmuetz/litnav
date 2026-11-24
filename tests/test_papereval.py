@@ -160,13 +160,23 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
         {"id": "k2", "point": "q", "kind": "data", "core": False}]}])
     calls = []
 
+    from litnav import claims as C
+
     def reply(messages):
         calls.append(messages)
         lines = messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
         ids = [l[1:].split("]")[0] for l in lines if l.startswith("[")]
         text = lines[1]
+        if messages[0]["content"] == C.RUNS_SYSTEM:          # v4: the runs table first
+            return {"runs": [{"run_name": "CTRL", "model": "WRF", "version": "", "configuration": "",
+                              "configuration_cited": "", "family": "physical", "horizontal_grid_spacing": "1 km",
+                              "vertical_levels": "", "period": "", "domain": "idealized",
+                              "coupling": "atmosphere_only", "ocean_model": "",
+                              "components": [{"kind": "deep_convection", "state": "off", "scheme": "",
+                                              "moments": "", "chunk": ids[0]}]}]}
+        assert "run_name 'CTRL': WRF, 1 km, idealized; deep convection: off" in messages[1]["content"]
         m = {"statement": "Gravity waves radiate from squall lines.", "chunk": ids[0], "quote": text[:30],
-             "source": "text", "claim_type": "shown", "evidence": "theory",
+             "source": "text", "claim_type": "shown", "evidence": "model", "run": "CTRL",
              "experiment": {"model": "", "resolution": "", "method": "", "deep_convection_parametrized": "unknown",
                             "run_name": ""},
              "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
@@ -177,7 +187,9 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
     fake_claude(monkeypatch, [])
     rd = P.run(lib, ev, "mentions", tmp_path / "m", chars=300, log=lambda m: None)
     jobs = P.load(rd / "jobs.jsonl")
-    assert len(jobs) == len(calls) >= 2                     # the paper in several calls, by section
+    assert len(jobs) == len(calls) >= 3                     # the runs call, then the paper by section
+    assert jobs[0]["role"] == "runs" and all(j.get("after") == jobs[0]["id"] for j in jobs[1:])
+    jobs = jobs[1:]
     assert all("Abstract:" in c[1]["content"] or "Opening (no abstract" in c[1]["content"] for c in calls)
     assert json.loads((rd / "run.json").read_text())["eval_chars"] == 300
     assert P.judge(lib, ev, rd, log=lambda m: None) == 1      # one judgment for the paper
@@ -189,6 +201,9 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
     assert s["hedging_accuracy"] == 0.5 and s["core_coverage"] == 1.0
     assert s["calls"] == len(jobs) and s["calls_at_cap"] == 0
     assert s["evidence_unknown"] == 0.0 and s["evidence_unknown_judge"] == 0.0
+    out = P.paper_results(rd, "mentions")["mentions-jones2019gravity"]["output"]
+    assert out["runs"][0]["run_name"] == "CTRL"
+    assert {C.evidence_type(m, out["runs"]) for m in out["mentions"]} == {"cpm"}   # scheme off, 1 km
 
 
 def test_mention_groups_and_records():
@@ -314,6 +329,8 @@ def test_mentions_copying_is_reasked_and_logged(ilib, tmp_path, monkeypatch):
     seen = []
 
     def reply(messages):
+        if messages[0]["content"].startswith("You list the model runs"):   # v4 runs call
+            return {"runs": []}
         seen.append(messages)
         ids = [l[1:].split("]")[0] for l in messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
                if l.startswith("[")]
@@ -330,7 +347,7 @@ def test_mentions_copying_is_reasked_and_logged(ilib, tmp_path, monkeypatch):
     monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
     fake_claude(monkeypatch, [])
     rd = P.run(lib, ev, "mentions", tmp_path / "m", chars=100_000, log=lambda m: None)
-    assert len(P.load(rd / "jobs.jsonl")) == 1 and len(seen) == 2
+    assert len(P.load(rd / "jobs.jsonl")) == 2 and len(seen) == 2       # the runs call, then the one group
     assert "copy runs of words" in seen[1][-1]["content"] and lifted.split()[0].lower() in seen[1][-1]["content"]
     assert P.reask_jobs(lib, rd, "mentions") == []                  # asked once only
     s = P.report(lib, ev, rd)["summary"]
@@ -381,6 +398,8 @@ def test_mentions_rewrite_only_the_copying_statements_and_check_their_meaning(il
     seen = []
 
     def reply(messages):
+        if messages[0]["content"].startswith("You list the model runs"):   # v4 runs call
+            return {"runs": []}
         seen.append(messages)
         if messages[0]["content"] == C.MEANING_SYSTEM:
             return {"checks": [{"n": 2, "verdict": "same", "reason": "same claim"},
@@ -438,6 +457,8 @@ def test_a_rewrite_that_still_copies_is_not_checked(ilib, tmp_path, monkeypatch)
     seen = []
 
     def reply(messages):
+        if messages[0]["content"].startswith("You list the model runs"):   # v4 runs call
+            return {"runs": []}
         seen.append(messages)
         if messages[0]["content"] == C.MEANING_SYSTEM:
             return {"checks": []}

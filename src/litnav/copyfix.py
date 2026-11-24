@@ -231,6 +231,41 @@ def merge_rewrites(out: dict, again: dict, asked: list[int], checks: dict | None
 
 # ---- the chain, for a runner
 
+RUNS_SLOT = "{{RUNS}}"
+
+
+def runs_table(runs: list[dict]) -> str:
+    """A paper's runs, one line each, for a section call's prompt."""
+    lines = []
+    for r in runs or []:
+        comps = "; ".join(
+            f"{c.get('kind', '').replace('_', ' ')}: "
+            + ({"off": "off", "not_stated": "not stated"}.get(c.get("state"), c.get("scheme") or "used"))
+            for c in r.get("components") or [])
+        head = ", ".join(x for x in (r.get("model"), r.get("configuration"), r.get("horizontal_grid_spacing"),
+                                     r.get("domain")) if x)
+        lines.append(f"- run_name '{r.get('run_name', '')}': {head}" + (f"; {comps}" if comps else ""))
+    return "\n".join(lines) or "(no runs found in the methods)"
+
+
+def fill(job: dict, results: dict) -> dict:
+    """A job that waits for another ("after") with that job's runs table put
+    in its prompt; any other job unchanged."""
+    after = job.get("after")
+    if not after:
+        return job
+    r = results.get(after) or {}
+    out = r.get("output") if r.get("ok") else None
+    table = runs_table((out or {}).get("runs") if isinstance(out, dict) else None)
+    msgs = [{**m, "content": m["content"].replace(RUNS_SLOT, table)} if m["role"] == "user" else m
+            for m in job["messages"]]
+    return {**job, "messages": msgs}
+
+
+def ready(job: dict, results: dict) -> bool:
+    """A job can start: it waits for nothing, or what it waits for has finished (ok or not)."""
+    return not job.get("after") or job["after"] in results
+
 def statements_copied(statements: list[str], grams: set, title: str = "") -> list[dict]:
     """[{n (1-based), run, words}] for statements copying COPY_LIMIT+ words."""
     bad = []
@@ -294,6 +329,7 @@ def next_job(job: dict, results: dict) -> dict | None:
         return summary_rephrase_job(job, out, err) if err else None
     if job.get("followup") != "mentions" or job.get("rewrite") or job.get("meaning_check"):
         return None
+    job = fill(job, results)
     first = results.get(job["id"]) or {}
     out = first.get("output")
     if not (first.get("ok") and isinstance(out, dict)):

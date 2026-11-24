@@ -165,10 +165,15 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
     each result is written as it finishes."""
     todo = todo_jobs(jobs, results)
     all_ = [json.loads(l) for l in jobs.read_text("utf-8").splitlines() if l.strip()]
-    chained = copyfix is not None and any(j.get("followup") for j in all_)
+    chained = copyfix is not None and any(j.get("followup") or j.get("after") for j in all_)
     by_id = {j["id"]: j for j in all_}        # parents, to chain each follow-up from
     res = load_results(results) if chained else {}
     total = len(todo)
+    if chained:                               # a job that waits for another starts once that one is done
+        waiting = [j for j in todo if not copyfix.ready(j, res)]
+        todo = [j for j in todo if copyfix.ready(j, res)]
+    else:
+        waiting = []
     extra = []                                # follow-ups started as their parent finishes
     if results.is_file() and results.stat().st_size:
         with open(results, "rb") as f:          # a killed job can leave half a line: start a new one
@@ -197,6 +202,8 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
                     stopped = True
                     break
                 i += 1
+                if chained:
+                    job = copyfix.fill(job, res)
                 pending.add(pool.submit(run_job, job, url, model, **kw))
             if not pending:
                 break
@@ -209,6 +216,10 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
                 n += r["ok"]
                 if chained:
                     res[r["id"]] = r
+                    released = [j for j in waiting if j.get("after") == r["id"]]
+                    if released:
+                        waiting = [j for j in waiting if j.get("after") != r["id"]]
+                        extra.extend(released)
                     parent = by_id.get(_base(r["id"]))
                     nxt = followup(parent, res) if parent and r["ok"] else None
                     if nxt and not any(x["id"] == nxt["id"] for x in extra):
@@ -217,7 +228,13 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
                 rate = n / max(time.time() - t0, 1) * 3600
                 log(f"[{n}/{total}] {r['id']} {r['seconds']:.0f}s "
                     + ("ok" if r["ok"] else f"FAILED {r['error'][:120]}") + f" ({rate:.0f}/h)")
+    if waiting and not stopped_by_limit(limit_s, t0):
+        log(f"{len(waiting)} job(s) still wait for a job that did not run; rerun to continue")
     return n
+
+
+def stopped_by_limit(limit_s, t0) -> bool:
+    return bool(limit_s and time.time() - t0 > limit_s)
 
 
 def main(argv=None) -> int:

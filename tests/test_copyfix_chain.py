@@ -94,3 +94,68 @@ def test_pull_imports_the_followups(tmp_path):
     assert spool._apply(None, "b1", b, d, log=lambda *a: None) == 3
     got = [json.loads(l)["id"] for l in (rd / "results.jsonl").read_text().splitlines()]
     assert got == ["mentions-k--g01", "mentions-k--g01-r", "mentions-k--g01-c"]
+
+
+RUN = {"run_name": "CTRL", "model": "UM", "version": "", "configuration": "RA2T", "configuration_cited": "",
+       "family": "physical", "horizontal_grid_spacing": "2.2 km", "vertical_levels": "", "period": "",
+       "domain": "limited_area", "coupling": "atmosphere_only", "ocean_model": "",
+       "components": [{"kind": "deep_convection", "state": "off", "scheme": "", "moments": "", "chunk": "k#1"},
+                      {"kind": "microphysics", "state": "used", "scheme": "CASIM", "moments": "2", "chunk": "k#1"}]}
+
+
+def test_section_calls_wait_for_the_runs_table(tmp_path, monkeypatch):
+    """v4: the runs call goes first on the node; section calls start after it, with its table in their prompt."""
+    from litnav import claims as C
+    order = []
+
+    def chat(url, model, messages, schema=None, **kw):
+        order.append(messages[0]["content"][:12])
+        if messages[0]["content"] == C.RUNS_SYSTEM:
+            return json.dumps({"runs": [RUN]}), "m"
+        assert C.RUNS_SLOT not in messages[1]["content"]
+        assert "run_name 'CTRL': UM, RA2T, 2.2 km, limited_area; deep convection: off; microphysics: CASIM" \
+            in messages[1]["content"]
+        return json.dumps({"mentions": [{"statement": "Cold pools matter.", "run": "CTRL", "evidence": "model"}]}), "m"
+    monkeypatch.setattr(batch_runner, "chat", chat)
+    runs = {"id": "mentions-k--runs", "key": "k", "role": "runs", "schema": {"type": "object"},
+            "messages": [{"role": "system", "content": C.RUNS_SYSTEM}, {"role": "user", "content": "Passages:\n"}]}
+    secs = [{**job(), "id": f"mentions-k--g0{n}", "after": runs["id"],
+             "messages": [{"role": "system", "content": "Extract."},
+                          {"role": "user", "content": f"Runs:\n{C.RUNS_SLOT}\n\nPassages:\n[k#1] {PASSAGE}"}]}
+            for n in (1, 2)]
+    jobs, res = tmp_path / "jobs.jsonl", tmp_path / "results.jsonl"
+    jobs.write_text("".join(json.dumps(j) + "\n" for j in secs + [runs]))   # the runs call listed last
+    n = batch_runner.run(jobs, res, "http://x", "m", concurrency=8, log=lambda *a: None)
+    assert n == 3 and order[0] == C.RUNS_SYSTEM[:12]
+    assert batch_runner.todo_jobs(jobs, res) == []
+
+
+def test_evidence_type_from_the_runs_table():
+    from litnav import claims as C
+    ml = {**RUN, "run_name": "GC", "family": "machine_learning", "components": []}
+    param = {**RUN, "run_name": "GCM", "horizontal_grid_spacing": "100 km",
+             "components": [{"kind": "deep_convection", "state": "used", "scheme": "Gregory-Rowntree",
+                             "moments": "", "chunk": ""}]}
+    les = {**RUN, "run_name": "LES", "horizontal_grid_spacing": "100 m"}
+    unknown = {**RUN, "run_name": "KM", "components": []}                    # scheme not stated
+    runs = [RUN, ml, param, les, unknown]
+    m = {"evidence": "model", "experiment": {}}
+    assert C.evidence_type({**m, "run": "ctrl"}, runs) == "cpm"              # names match without case
+    assert C.evidence_type({**m, "run": "GC"}, runs) == "unknown"
+    assert C.evidence_type({**m, "run": "GCM"}, runs) == "parametrized_model"
+    assert C.evidence_type({**m, "run": "LES"}, runs) == "les"
+    assert C.evidence_type({**m, "run": "KM"}, runs) == "unknown"
+    assert C.evidence_type({**m, "run": "other"}, runs) == "unknown"         # falls back to its own facts
+    assert C.evidence_type({"evidence": "observations", "run": "CTRL"}, runs) == "observations"
+    recs, _ = C.records("k", [{"mentions": [{**m, "run": "ctrl", "statement": "s"}]}], {}, runs=runs)
+    assert recs[0]["run_name"] == "CTRL" and recs[0]["evidence_type"] == "cpm"
+
+
+def test_methods_rows_pick_the_methods():
+    from litnav import claims as C
+    rows = [{"id": "a", "kind": "abstract", "section_title": "Abstract", "text": "x"},
+            {"id": "i", "kind": "body", "section_title": "1 Introduction", "text": "i" * 10},
+            {"id": "m", "kind": "body", "section_title": "2 Model and experiments", "text": "m" * 10},
+            {"id": "r", "kind": "body", "section_title": "3 Results", "text": "r" * 10}]
+    assert [r["id"] for r in C.methods_rows(rows)] == ["m"]
+    assert [r["id"] for r in C.methods_rows([rows[1], rows[3]])] == ["i", "r"]   # no methods title: the body
