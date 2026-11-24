@@ -195,17 +195,25 @@ def summarize_job(it, limit: int | None = None) -> dict:
     return {"id": f"summarize-{it.key}-{sha[:12]}-v{derived.PROMPT_VERSION}", "kind": "summarize",
             "key": it.key, "text_sha256": sha, "chars_sent": inp["chars"], "truncated": inp["truncated"],
             "schema": inp["schema"], "passages": inp["ids"],
+            # a batch runner re-asks a copying summary in the same run (copyfix)
+            "followup": "summary", "title": it.title or "",
             "messages": [{"role": "system", "content": derived.SYSTEM},
                          {"role": "user", "content": inp["prompt"] + "\n\nReply with JSON only."}]}
 
 
 def rephrase_job(job: dict, out: dict, err: str) -> dict:
-    """The same summary job, asked once more after a refusal for copying: the
-    model sees its reply and the copied words."""
-    from . import derived
-    return {**job, "id": f"{job['id']}-r", "rephrased": True,
-            "messages": job["messages"] + [{"role": "assistant", "content": json.dumps(out, ensure_ascii=False)},
-                                           {"role": "user", "content": derived.rephrase_note(err)}]}
+    """The same summary job, asked once more after a refusal for copying."""
+    from . import copyfix
+    return copyfix.summary_rephrase_job(job, out, err)
+
+
+def apply_or_followup(lib, job: dict, res: dict, results: dict, *, via: str) -> dict:
+    """Apply a batch result, or the re-ask the runner already made of it (id
+    + "-r") when there is one: that is the summary to keep."""
+    again = results.get(f"{job['id']}-r")
+    if job.get("kind") == "summarize" and again and again.get("ok"):
+        return apply_result(lib, {**job, "rephrased": True}, again, via=via)
+    return apply_result(lib, job, res, via=via)
 
 
 def item_check_jobs(lib, it, *, force: bool = False) -> list[dict]:
@@ -502,18 +510,22 @@ def import_results(lib, folder: Path, *, log=print) -> dict:
                                  (folder / "jobs.jsonl").read_text("utf-8").splitlines() if l.strip())}
     counts = {"ok": 0, "failed": 0, "stale": 0, "unknown": 0}
     applied = set()
+    rows = []
     for line in (folder / "results.jsonl").read_text("utf-8").splitlines():
         try:
-            res = json.loads(line)
+            rows.append(json.loads(line))
         except json.JSONDecodeError:
             continue
+    ok = {r["id"]: r for r in rows if r.get("ok")}
+    for res in rows:
         job = jobs.get(res.get("id"))
         if not job:
-            counts["unknown"] += 1
+            if not (res.get("id") or "").endswith("-r") or (res.get("id") or "")[:-2] not in jobs:
+                counts["unknown"] += 1            # (a runner's re-ask is applied with its job)
             continue
         if res["id"] in applied:
             continue
-        st = apply_result(lib, job, res, via="batch")
+        st = apply_or_followup(lib, job, res, ok, via="batch")
         counts[st["status"]] += 1
         if st["status"] in ("ok", "stale"):
             applied.add(res["id"])

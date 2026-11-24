@@ -246,9 +246,52 @@ def sent_text(job: dict) -> str:
     return "\n".join(m["content"] for m in job["messages"] if m["role"] == "user")
 
 
+# ---- summaries: one re-ask of the whole reply (a summary is read as a whole)
+
+def summary_parts(d: dict) -> list[str]:
+    return [d.get("topic", ""), d.get("summary", "")] + [x.get("statement", "") for x in d.get("key_items") or []]
+
+
+def summary_copy_error(d: dict, grams: set, title: str = "") -> str:
+    """The refusal for a summary that copies (as litnav words it), or ''."""
+    best, phrase = 0, ""
+    for part in summary_parts(d):
+        b, ph, _, _ = longest_copy(part or "", grams, title=title)
+        if b > best:
+            best, phrase = b, ph
+    if best >= COPY_LIMIT:
+        return f"copies a run of {best} words from the paper (limit {COPY_LIMIT - 1}): \"{phrase}\""
+    return ""
+
+
+def rephrase_note(err: str) -> str:
+    """The message that re-asks a summary refused for copying."""
+    return (f"Your summary was refused: it {err.split(': ', 1)[0]}. The copied words: "
+            f"{err.split(': ', 1)[1] if ': ' in err else ''}. Write the whole JSON again, every field in your own "
+            "words: no run of words from the paper, apart from names. Reply with JSON only.")
+
+
+def summary_rephrase_job(job: dict, out: dict, err: str) -> dict:
+    """The same summary job, asked once more after a refusal for copying: the
+    model sees its reply and the copied words."""
+    return {**job, "id": f"{job['id']}-r", "rephrased": True,
+            "messages": job["messages"] + [{"role": "assistant", "content": json.dumps(out, ensure_ascii=False)},
+                                           {"role": "user", "content": rephrase_note(err)}]}
+
+
 def next_job(job: dict, results: dict) -> dict | None:
-    """The next follow-up for a mentions job (job["followup"] == "mentions"),
-    given the results so far by id; None when there is nothing (left) to do."""
+    """The next follow-up for a job that asks for them (job["followup"] is
+    "mentions" or "summary"), given the results so far by id; None when there
+    is nothing (left) to do."""
+    if job.get("followup") == "summary":
+        if job.get("rephrased") or f"{job['id']}-r" in results:
+            return None
+        first = results.get(job["id"]) or {}
+        out = first.get("output")
+        if not (first.get("ok") and isinstance(out, dict)):
+            return None
+        err = summary_copy_error(out, ngrams(sent_text(job)), job.get("title", ""))
+        return summary_rephrase_job(job, out, err) if err else None
     if job.get("followup") != "mentions" or job.get("rewrite") or job.get("meaning_check"):
         return None
     first = results.get(job["id"]) or {}

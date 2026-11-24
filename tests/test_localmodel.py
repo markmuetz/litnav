@@ -516,17 +516,32 @@ def test_copying_summary_is_asked_again(ilib, monkeypatch, tmp_path):
     assert len(replies) == 2 and "refused" in replies[1][-1]["content"]
     assert replies[1][-2]["role"] == "assistant"
     assert lib.get(it.key).summary()["summary"] == SUMMARY["summary"]
-    # through the queue: the refused job comes back with the note, once
+    # through a batch: the runner asks again in the same run, with the note
     it.summary_path.unlink()
     cli.main(["-L", str(lib.root), "summarize", "--via", "queue", it.key])
     out = tmp_path / "b"
     cli.main(["-L", str(lib.root), "queue", "export", str(out)])
-    FakeModel(monkeypatch, lambda msgs: copied)
+    seen = []
+
+    def batch_reply(msgs):
+        seen.append(msgs)
+        return copied if len(msgs) == 2 else SUMMARY
+    FakeModel(monkeypatch, batch_reply)
     batch_runner.run(out / "jobs.jsonl", out / "results.jsonl", "u", "m", log=lambda *a: None)
+    assert len(seen) == 2 and "refused" in seen[1][-1]["content"]
     cli.main(["-L", str(lib.root), "queue", "import", str(out)])
+    assert localmodel.queued(lib) == []
+    assert lib.get(it.key).summary()["summary"] == SUMMARY["summary"]
+    # a re-ask that copies again is refused; the job stays queued for a later batch
+    it.summary_path.unlink()
+    cli.main(["-L", str(lib.root), "summarize", "--via", "queue", it.key])
+    out2 = tmp_path / "b2"
+    cli.main(["-L", str(lib.root), "queue", "export", str(out2)])
+    FakeModel(monkeypatch, lambda msgs: copied)
+    batch_runner.run(out2 / "jobs.jsonl", out2 / "results.jsonl", "u", "m", log=lambda *a: None)
+    cli.main(["-L", str(lib.root), "queue", "import", str(out2)])
     (q,) = localmodel.queued(lib)
-    assert q["rephrased"] and q["id"].endswith("-r") and "refused" in q["messages"][-1]["content"]
-    assert lib.get(it.key).summary() is None
+    assert not q["id"].endswith("-r") and lib.get(it.key).summary() is None
 
 
 def test_guard_lets_a_pdf_be_opened_in_a_viewer(ilib):
@@ -573,3 +588,22 @@ def test_licences_from_text_marks_open_and_prints_no_text(ilib, capsys):
     assert cli.main(["-L", str(lib.root), "licences", "--from-text", "--apply"]) == 0
     it = lib.get("smith2021cold")
     assert it.sharing == "open" and it.meta["licence"]["source"] == "text"
+
+
+def test_spool_pull_waits_for_the_runners_reask(ilib, tmp_path):
+    from litnav import spool
+    lib = strict(ilib)
+    it = lib.get("smith2021cold")
+    job = localmodel.summarize_job(it)
+    copied = {**SUMMARY, "summary": " ".join(it.text().split()[:30])}
+    d = tmp_path / "batch"
+    d.mkdir()
+    (d / "jobs.jsonl").write_text(json.dumps(job) + "\n")
+    (d / "results.jsonl").write_text(json.dumps({"id": job["id"], "ok": True, "output": copied, "model": "m"}) + "\n")
+    b = {"kind": "summarize", "jobs": [job["id"]], "imported": []}
+    spool._apply(lib, "b1", b, d, log=lambda *a: None, final=False)
+    assert b["imported"] == [] and localmodel.queued(lib) == [] and it.summary() is None   # waits
+    with open(d / "results.jsonl", "a") as f:
+        f.write(json.dumps({"id": job["id"] + "-r", "ok": True, "output": SUMMARY, "model": "m"}) + "\n")
+    spool._apply(lib, "b1", b, d, log=lambda *a: None, final=True)
+    assert job["id"] in b["imported"] and lib.get(it.key).summary()["summary"] == SUMMARY["summary"]

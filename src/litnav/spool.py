@@ -188,7 +188,7 @@ def pull(lib, *, log=print) -> dict:
                 _rsync(_rpath(cfg, f"{loc}/{bid}/server.json"), str(d / "server.json"))
             except RemoteError:
                 pass                       # an older worker
-        new = _apply(lib, bid, b, d, log=log) if (d / "results.jsonl").is_file() else 0
+        new = _apply(lib, bid, b, d, log=log, final=loc == "done") if (d / "results.jsonl").is_file() else 0
         b["state"] = {"inbox": "waiting", "running": "running", "done": "finished"}[loc]
         if loc == "done" and set(b["imported"]) >= set(b["jobs"]) - set(b.get("failed", [])):
             _ssh(cfg, f"rm -rf {_spool(cfg)}/done/{bid}")
@@ -199,16 +199,20 @@ def pull(lib, *, log=print) -> dict:
     return summary
 
 
-def _apply(lib, bid, b, d, *, log) -> int:
+def _apply(lib, bid, b, d, *, log, final: bool = True) -> int:
+    """final: the batch is finished on the cluster (no more follow-ups to come)."""
     jobs = {j["id"]: j for j in (json.loads(l) for l in (d / "jobs.jsonl").read_text("utf-8").splitlines()
                                  if l.strip())}
     done = set(b["imported"])
     fresh = []
+    ok_all = {}
     for line in (d / "results.jsonl").read_text("utf-8").splitlines():
         try:
             r = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if r.get("ok") and r.get("id"):
+            ok_all[r["id"]] = r
         rid = r.get("id") or ""
         known = rid in jobs or (rid.endswith(("-r", "-c")) and rid[:-2] in jobs)    # a follow-up run on the node
         if known and rid not in done and r.get("ok"):
@@ -224,9 +228,13 @@ def _apply(lib, bid, b, d, *, log) -> int:
     else:
         applied = set()
         for r in fresh:
-            if r["id"] not in jobs:                  # follow-ups belong to eval batches only
+            if r["id"] not in jobs:                  # a runner's re-ask: applied with its job
                 continue
-            s = localmodel.apply_result(lib, jobs[r["id"]], r, via="batch")
+            job = jobs[r["id"]]
+            s = localmodel.apply_or_followup(lib, job, r, ok_all, via="batch")
+            if s.get("rephrase") and job.get("followup") and not final:
+                done.discard(r["id"])                # the runner may still re-ask it: wait for that
+                continue
             if s.get("rephrase"):                   # copied from the paper: the next batch asks again
                 localmodel.enqueue(lib, [s["rephrase"]])
                 applied.add(r["id"])

@@ -39,7 +39,7 @@ import tempfile
 from . import sharing as S
 from .net import Refused
 from .copyfix import (COPY_LIMIT, _FUNCTION, _fold, allowed_spans, longest_copy, ngrams,  # noqa: F401
-                      repair, words)
+                      rephrase_note, repair, words)
 from .util import atomic_write, sha256_file
 
 SUMMARY_MODEL = "claude-haiku-5-5"
@@ -244,13 +244,6 @@ def check(it, d) -> str | None:
     if st["copied_run"] >= COPY_LIMIT:
         return f"copies a run of {st['copied_run']} words from the paper (limit {COPY_LIMIT - 1}): \"{st['copied_words']}\""
     return None
-
-
-def rephrase_note(err: str) -> str:
-    """The message that re-asks a summary refused for copying."""
-    return (f"Your summary was refused: it {err.split(': ', 1)[0]}. The copied words: "
-            f"{err.split(': ', 1)[1] if ': ' in err else ''}. Write the whole JSON again, every field in your own "
-            "words: no run of words from the paper, apart from names. Reply with JSON only.")
 
 
 def write_summary(it, data: dict, prov: dict) -> bool:

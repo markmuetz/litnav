@@ -220,7 +220,8 @@ def build_job(lib, key: str, task: str, chars: int | None = EVAL_CHARS) -> dict:
     if task == "summary":
         j = localmodel.summarize_job(it, limit=chars or 10 ** 9)
         return {"id": f"summary-{key}", "kind": "eval", "task": task, "key": key, "schema": j["schema"],
-                "messages": j["messages"], "chars_sent": j["chars_sent"], "passages": j.get("passages", [])}
+                "messages": j["messages"], "chars_sent": j["chars_sent"], "passages": j.get("passages", []),
+                "followup": j.get("followup"), "title": j.get("title", "")}
     ps = chunks_for(lib, it, chars)
     body = "\n\n".join(f"[{p['id']}] ({p['section']})\n{p['text']}" for p in ps)
     ids = [p["id"] for p in ps]
