@@ -83,9 +83,19 @@ class Holdings:
             words = set(ft.split()) - {"the", "a", "an", "of", "and", "in", "on", "for", "to", "with"}
             for k in self.prefixes.get(pre, []):
                 tw = set(self.key_titles.get(k, "").split())
-                if not words or len(words & tw) / len(words) >= 0.4:
+                if tw and (not words or len(words & tw) / len(words) >= 0.4):
                     return "maybe", k
+                if not tw and _key_word_in(k, pre, ft):
+                    return "maybe", k           # an item with no bib: only its key to go on
         return "", ""
+
+
+def _key_word_in(key: str, prefix: str, folded_title: str) -> bool:
+    """Does a key's word (dee2011erainterim -> 'erainterim') appear in a title,
+    spaces ignored? For items with no bib entry to match on."""
+    word = re.sub(r"_.*$", "", key[len(prefix):])
+    word = re.sub(r"\d+$", "", word)
+    return len(word) >= 4 and word in folded_title.replace(" ", "")
 
 
 # ---- the to-fetch list

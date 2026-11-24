@@ -57,3 +57,11 @@ def test_explore_sends_only_lookups(lib):
     assert [o["doi"] for o in out] == ["10.1/rec"] and out[0]["seeds"] == ["smith2021cold"]
     with pytest.raises(Refused):
         D.explore(lib, c, ["doe2026plans_draft"])
+
+
+def test_item_without_a_bib_matches_on_its_key(lib):
+    lib.create_item("dee2011erainterim")                   # no ref.bib: only the key
+    h = D.Holdings(lib)
+    assert h.status("10.1002/qj.828", "The ERA-Interim reanalysis: configuration and performance",
+                    "Dick P. Dee", 2011) == ("maybe", "dee2011erainterim")
+    assert h.status("10.1/x", "Another 2011 paper", "D. Dee", 2011) == ("", "")
