@@ -42,6 +42,19 @@ def add(sub):
     q = s.add_parser("topics", help="OpenAlex topics: works in the field vs papers in the library")
     q.add_argument("--limit", "-k", type=int, default=40)
     q.set_defaults(func=cmd_field_topics)
+    q = s.add_parser("embed", help="embed field works and library papers locally (title + abstract)")
+    q.set_defaults(func=cmd_field_embed)
+    q = s.add_parser("search", help="semantic search over field abstracts and library papers")
+    q.add_argument("query")
+    q.add_argument("--limit", "-k", type=int, default=15)
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_field_search)
+    q = s.add_parser("map", help="cluster the field and library into topics; least-held first "
+                     "(writes derived/field-map.md)")
+    q.add_argument("--clusters", "-n", type=int, default=40)
+    q.add_argument("--seed", type=int, default=0)
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_field_map)
     for name, hlp in (("want", "mark wanted, and add to the to-fetch list"),
                       ("skip", "mark not wanted (not proposed again)"),
                       ("note", "attach a note")):
@@ -204,3 +217,49 @@ def cmd_field_decide(a):
         con.close()
         D.add(lib, [{**r, "source": "field"} for r in rows if r["doi"]])
     print(f"{n} marked {a.status}")
+
+
+def _embedder(lib):
+    from ..embed import Embedder
+    return Embedder(lib.config["search"]["embedding_model"])
+
+
+def cmd_field_embed(a):
+    import sys
+
+    from .. import field
+    lib = Library.find(a.library)
+    print(json.dumps(field.embed(lib, _embedder(lib), log=lambda m: print(m, file=sys.stderr))))
+
+
+def cmd_field_search(a):
+    from .. import field
+    lib = Library.find(a.library)
+    rows = field.search(lib, _embedder(lib), a.query, k=a.limit)
+    if a.json:
+        print(json.dumps(rows, indent=1))
+        return
+    for r in rows:
+        if r["held"]:
+            print(f"{r['score']:.3f}  HELD  {r['held']}")
+        else:
+            print(f"{r['score']:.3f}  {r['id']}  {r['year']} {r['first_author'][:22]}: "
+                  f"{r['title'][:90]} ({r['kind']})" + ("" if r["abstract"] else "  (no abstract)"))
+
+
+def cmd_field_map(a):
+    import sys
+
+    from .. import field
+    lib = Library.find(a.library)
+    cl = field.topic_map(lib, k=a.clusters, seed=a.seed)
+    if a.json:
+        print(json.dumps(cl, indent=1))
+        return
+    p = lib.root / "derived" / "field-map.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(field.map_markdown(cl), "utf-8")
+    for c in cl:
+        print(f"{c['held_share']:4.0%} held  {c['field_works']:4d} field  {c['held']:4d} lib  "
+              f"#{c['cluster']:<3d} {', '.join(c['terms'][:6])}")
+    print(f"written to {p}", file=sys.stderr)

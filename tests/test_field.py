@@ -97,3 +97,41 @@ def test_kind_of_keeps_studies_as_research():
     assert k("EUREC4A: A Field Campaign to Elucidate the Couplings Between Clouds") == "project"
     assert k("A new dynamical core for the Met Office's global and regional modelling") == "model"
     assert k("Description of the NCAR Community Atmosphere Model (CAM 3.0)") == "model"
+
+
+def _store(lib):
+    from litnav import index
+    a = lib.create_item("smith2021cold", bib("smith2021cold", "Cold pools and gust fronts", "10.1/a"))
+    lib.create_item("doe2026plans_draft", bib("doe2026plans_draft", "Secret plans", "10.1/s"),
+                    sharing_level="confidential")
+    index.update(lib, log=lambda *x: None)
+    con = field.connect(lib)
+    with con:
+        con.execute("INSERT INTO library VALUES ('W1','smith2021cold','','','')")
+        con.execute("INSERT INTO library VALUES ('W2','doe2026plans_draft','','','')")
+        rows = [("W10", "Cold pools trigger new cells at gust fronts", "cold pools gust fronts cells"),
+                ("W11", "Cold pool collisions and gust fronts", "cold pools gust fronts collide"),
+                ("W20", "Ozone in the stratosphere", "ozone stratosphere chemistry ozone"),
+                ("W21", "Stratospheric ozone recovery", "ozone stratosphere recovery chemistry")]
+        for i, t, ab in rows:
+            con.execute("INSERT INTO works (id, title, abstract, year, first_author, kind, score, "
+                        "library_citers) VALUES (?,?,?,2020,'X','research',1,3)", (i, t, ab))
+    con.close()
+    return a
+
+
+def test_embed_search_and_map(lib):
+    from test_search import FakeEmbedder
+    _store(lib)
+    e = FakeEmbedder()
+    r = field.embed(lib, e, log=lambda *x: None)
+    assert r["total"] == 5                                    # 4 works + 1 library paper, no draft
+    assert field.embed(lib, e, log=lambda *x: None)["embedded"] == 0
+    hits = field.search(lib, e, "ozone stratosphere", k=2)
+    assert {h["id"] for h in hits} == {"W20", "W21"}
+    cl = field.topic_map(lib, k=2)
+    by = {tuple(sorted(w["id"] for w in c["top_unheld"])): c for c in cl}
+    assert by[("W20", "W21")]["held"] == 0 and by[("W10", "W11")]["held"] == 1
+    assert cl[0]["held_share"] == 0                           # least held first
+    assert "ozone" in by[("W20", "W21")]["terms"]
+    assert "# The field around the library" in field.map_markdown(cl)

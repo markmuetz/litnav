@@ -257,3 +257,183 @@ def decide(lib, ids: list[str], status: str, note: str = "") -> int:
         wr.writeheader()
         wr.writerows(sorted(rows.values(), key=lambda r: r["id"]))
     return n
+
+
+# ---- embeddings, search and the topic map
+# Field works are embedded as title + abstract; library papers the same way
+# (public abstract, else the one found in the text, else the summary) so the
+# two sit in one space. Embedding is local; vectors stay in the field store.
+# Cluster labels use field works' titles and abstracts and library titles
+# only, so no words of a licensed paper's text show up in them.
+
+VEC_SCHEMA = "CREATE TABLE IF NOT EXISTS vecs (id TEXT PRIMARY KEY, src TEXT, vhash TEXT, vec BLOB)"
+STOP = set("""a an the of and or in on for to with by from at as is are was were be been being this
+that these those it its we our their which using use used based new over under between into than
+via about during after before not no also can may more most such both two three one study results
+show shows shown paper here using model models data analysis""".split())
+
+
+def _texts(lib, con):
+    """(id, src, text) for every field work and library paper to embed."""
+    from . import abstracts
+    from . import index as I
+    out = [(r["id"], "field", f"{r['title']}\n{r['abstract']}")
+           for r in con.execute("SELECT id, title, abstract FROM works")]
+    icon = I.connect(lib, readonly=True)
+    for r in con.execute("SELECT id, key FROM library"):
+        if not r["key"]:
+            continue
+        it = lib.get(r["key"])
+        if not it.allowed(LOOKUP):
+            continue
+        row = icon.execute("SELECT abstract, summary FROM items WHERE key=?", (it.key,)).fetchone()
+        body = abstracts.public(it) or (row["abstract"] if row else "") or (row["summary"] if row else "")
+        out.append((r["id"], "library", f"{it.title}\n{body}"))
+    icon.close()
+    return out
+
+
+def embed(lib, embedder, *, log=print) -> dict:
+    from .embed import vhash
+    con = connect(lib)
+    con.execute(VEC_SCHEMA)
+    have = dict(con.execute("SELECT id, vhash FROM vecs").fetchall())
+    todo = [(i, s, t, vhash(embedder.name, t)) for i, s, t in _texts(lib, con)]
+    todo = [x for x in todo if have.get(x[0]) != x[3]]
+    log(f"field: {len(todo)} to embed")
+    for i in range(0, len(todo), 256):
+        part = todo[i:i + 256]
+        m = embedder.docs([t for _, _, t, _ in part])
+        with con:
+            con.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?,?)",
+                            [(wid, s, h, m[j].tobytes()) for j, (wid, s, _, h) in enumerate(part)])
+        log(f"  embedded {min(i + 256, len(todo))}/{len(todo)}")
+    n = con.execute("SELECT count(*) FROM vecs").fetchone()[0]
+    con.close()
+    return {"embedded": len(todo), "total": n}
+
+
+def _matrix(con):
+    import numpy as np
+    con.execute(VEC_SCHEMA)
+    rows = con.execute("SELECT id, src, vec FROM vecs ORDER BY id").fetchall()
+    if not rows:
+        raise ValueError("no field vectors yet: run `litnav field embed`")
+    m = np.frombuffer(b"".join(r["vec"] for r in rows), dtype="float32").reshape(len(rows), -1)
+    m = m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
+    return [r["id"] for r in rows], [r["src"] for r in rows], m
+
+
+def search(lib, embedder, query: str, *, k: int = 15) -> list[dict]:
+    import numpy as np
+    con = connect(lib)
+    ids, srcs, m = _matrix(con)
+    q = embedder.query(query)
+    s = m @ (q / max(np.linalg.norm(q), 1e-9))
+    out = []
+    for j in np.argsort(-s)[:k]:
+        if srcs[j] == "library":
+            r = con.execute("SELECT key FROM library WHERE id=?", (ids[j],)).fetchone()
+            out.append({"id": ids[j], "held": r["key"], "score": round(float(s[j]), 3)})
+        else:
+            r = dict(con.execute("SELECT id, doi, title, year, first_author, kind, abstract "
+                                 "FROM works WHERE id=?", (ids[j],)).fetchone())
+            out.append({**r, "held": "", "score": round(float(s[j]), 3)})
+    con.close()
+    return out
+
+
+def kmeans(m, k: int, *, iters: int = 50, seed: int = 0):
+    """Spherical k-means (cosine), k-means++ start; deterministic for a seed."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    c = [m[rng.integers(len(m))]]
+    for _ in range(1, k):
+        d = 1 - np.max(m @ np.array(c).T, axis=1)
+        d = np.clip(d, 0, None) ** 2
+        c.append(m[rng.choice(len(m), p=d / d.sum())])
+    c = np.array(c)
+    lab = None
+    for _ in range(iters):
+        new = np.argmax(m @ c.T, axis=1)
+        if lab is not None and (new == lab).all():
+            break
+        lab = new
+        for j in range(k):
+            pts = m[lab == j]
+            if len(pts):
+                v = pts.sum(0)
+                c[j] = v / max(np.linalg.norm(v), 1e-9)
+    return lab, c
+
+
+def _words(t: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z][a-z0-9-]{2,}", t.lower()) if w not in STOP]
+
+
+def topic_map(lib, *, k: int = 40, seed: int = 0) -> list[dict]:
+    """Clusters of field works and library papers together: per cluster, its
+    distinctive words, how many field works and held papers it has, and its
+    top unheld works by score."""
+    import numpy as np
+    con = connect(lib)
+    ids, srcs, m = _matrix(con)
+    lab, cent = kmeans(m, k, seed=seed)
+    works = {r["id"]: dict(r) for r in con.execute(
+        "SELECT id, title, abstract, year, first_author, score, kind, library_citers FROM works")}
+    keys = dict(con.execute("SELECT id, key FROM library").fetchall())
+    con.close()
+    docs = []
+    for i, s in zip(ids, srcs):
+        if s == "field":
+            w = works.get(i, {})
+            docs.append(_words(f"{w.get('title', '')} {w.get('abstract', '')}"))
+        else:
+            k_ = keys.get(i, "")
+            docs.append(_words(lib.get(k_).title if k_ else ""))
+    df = Counter(w for d in docs for w in set(d))
+    n = len(docs)
+    out = []
+    for j in range(k):
+        idx = np.where(lab == j)[0]
+        if not len(idx):
+            continue
+        tf = Counter(w for i in idx for w in docs[i])
+        terms = sorted(tf, key=lambda w: -tf[w] * math.log(n / (1 + df[w])))[:8]
+        f = [ids[i] for i in idx if srcs[i] == "field"]
+        held = [keys.get(ids[i], "") for i in idx if srcs[i] == "library"]
+        # closest to the centre first, for the held papers
+        sims = {ids[i]: float(m[i] @ cent[j]) for i in idx}
+        held.sort(key=lambda kk: -max((sims[i] for i, x in keys.items() if x == kk and i in sims),
+                                      default=0))
+        top = sorted((works[i] for i in f if i in works), key=lambda w: -(w["score"] or 0))[:5]
+        out.append({"cluster": j, "terms": terms, "field_works": len(f), "held": len(held),
+                    "held_share": round(len(held) / len(idx), 2),
+                    "held_examples": held[:4],
+                    "top_unheld": [{"id": w["id"], "year": w["year"], "first_author": w["first_author"],
+                                    "title": w["title"], "kind": w["kind"],
+                                    "library_citers": w["library_citers"]} for w in top]})
+    out.sort(key=lambda c: c["held_share"])
+    return out
+
+
+def map_markdown(clusters: list[dict]) -> str:
+    """The topic map as a page: thinnest-held clusters first."""
+    lines = ["# The field around the library: topic map", "",
+             "Clusters of field works (abstracts from OpenAlex) and library papers, embedded "
+             "together. Sorted by the share held, so the least-covered topics come first. "
+             "Words are the cluster's most distinctive; 'top unheld' ranks works by how many "
+             "library papers cite them, discounted for very widely cited ones.", "",
+             "| # | words | field works | held | held share |", "|---|---|---|---|---|"]
+    for c in clusters:
+        lines.append(f"| {c['cluster']} | {', '.join(c['terms'])} | {c['field_works']} | "
+                     f"{c['held']} | {c['held_share']:.0%} |")
+    for c in clusters:
+        lines += ["", f"## {c['cluster']}: {', '.join(c['terms'][:5])}", "",
+                  f"{c['field_works']} field works, {c['held']} held "
+                  f"({c['held_share']:.0%}). Held, e.g.: "
+                  f"{', '.join('`' + k + '`' for k in c['held_examples']) or 'none'}.", ""]
+        for w in c["top_unheld"]:
+            lines.append(f"- {w['year']} {w['first_author']}: {w['title']} "
+                         f"({w['kind']}; cited by {w['library_citers']} library papers; {w['id']})")
+    return "\n".join(lines) + "\n"
