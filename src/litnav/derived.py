@@ -38,6 +38,8 @@ import tempfile
 
 from . import sharing as S
 from .net import Refused
+from .copyfix import (COPY_LIMIT, _FUNCTION, _fold, allowed_spans, longest_copy, ngrams,  # noqa: F401
+                      repair, words)
 from .util import atomic_write, sha256_file
 
 SUMMARY_MODEL = "claude-haiku-5-5"
@@ -49,7 +51,6 @@ SUMMARY_MAX_TOKENS = 8000        # Haiku thinks by default; thinking counts agai
 
 ITEM_KINDS = ["method", "finding", "conclusion", "limitation"]
 HEDGING = ["strong", "moderate", "weak"]
-COPY_LIMIT = 12                  # words: a longer run copied from the paper is rejected
 
 
 def schema(ids: list[str] | None = None) -> dict:
@@ -207,98 +208,6 @@ def valid(d) -> bool:
 
 
 # ---- copying: no run of COPY_LIMIT words from the paper
-
-_FUNCTION = {"of", "the", "on", "and", "for", "in", "at", "to", "a", "an", "with", "from", "by"}
-
-
-def _fold(text: str) -> str:
-    import unicodedata
-    t = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in t if not unicodedata.combining(c)).lower()
-
-
-_TOKEN = re.compile(r"[^\W_]+(?:[.,\-\u2212\u2013/][^\W_]+)*")
-
-
-def words(text: str) -> list[str]:
-    """Lower-case words, accents folded; letters of any script and digits. A
-    token with a digit in it is one word however it is punctuated, so a number
-    ('2.5', '2.5-3.0', '−1') or a run label ('1.5F', 'E63-SMCM') counts once;
-    hyphenated words ('high-resolution') are split."""
-    out = []
-    for m in _TOKEN.finditer(_fold(text)):
-        t = m.group()
-        if any(c.isdigit() for c in t):
-            out.append(t.replace("\u2212", "-").replace("\u2013", "-"))
-        else:
-            out += re.findall(r"[^\W_]+", t)
-    return out
-
-
-def repair(text: str) -> str:
-    """Undo PDF line-end hyphenation: 'convec-\ntion' and 'convec- tion' -> 'convection'
-    (not before and/or/to, as in 'pre- and post-')."""
-    text = re.sub(r"(\w)-[ \t]*\n\s*(\w)", r"\1\2", text)
-    return re.sub(r"(\w)- (?!(?:and|or|to|vs)\b)(?=[a-z])", r"\1", text)
-
-
-def ngrams(text: str, n: int = 6) -> set:
-    w = words(repair(text))
-    return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
-
-
-def allowed_spans(text: str, title: str = "") -> set[int]:
-    """Word positions in `text` that may match the paper: the paper's title, and
-    a name written out before its acronym, e.g. 'Dynamics of the Atmospheric
-    general circulation Modeled On Non-hydrostatic Domains (DYAMOND)'."""
-    w = words(text)
-    out: set[int] = set()
-    tw = words(title)
-    if len(tw) >= 4:
-        tgrams = {" ".join(tw[i:i + 4]) for i in range(len(tw) - 3)}
-        for i in range(len(w) - 3):
-            if " ".join(w[i:i + 4]) in tgrams:
-                out.update(range(i, i + 4))
-    for m in re.finditer(r"\(([A-Z][A-Za-z0-9-]{1,11})\)", text):
-        acr = [c for c in _fold(m.group(1)) if c.isalnum()]
-        before = words(text[:m.start()])
-        end = len(before)
-        for k in range(min(end, 3 * len(acr)), 0, -1):       # the longest name the acronym spells
-            span = before[end - k:]
-            if span[0][0] != acr[0] or span[0] in _FUNCTION:
-                continue
-            joined, i = "".join(span), 0
-            for c in joined:
-                if i < len(acr) and c == acr[i]:
-                    i += 1
-            if i == len(acr):
-                out.update(range(end - k, end))
-                break
-    return out
-
-
-def longest_copy(out_text: str, paper_grams: set, n: int = 6, title: str = "") -> tuple[int, str, int, int]:
-    """(longest run of words copied from the paper, that run, windows of n words
-    found in the paper, windows in all). Allowed spans (allowed_spans) break runs
-    and are not counted."""
-    w = words(out_text)
-    ok = allowed_spans(out_text, title)
-    best = run = shared = total = 0
-    best_end = 0
-    for i in range(len(w) - n + 1):
-        if any(j in ok for j in range(i, i + n)):
-            run = 0
-            continue
-        total += 1
-        if " ".join(w[i:i + n]) in paper_grams:
-            shared += 1
-            run = run + 1 if run else n
-            if run > best:
-                best, best_end = run, i + n
-        else:
-            run = 0
-    return best, " ".join(w[best_end - best:best_end]) if best else "", shared, total
-
 
 def copied_run(out_text: str, paper_grams: set, n: int = 6, title: str = "") -> int:
     """Longest run of words copied from the paper (0 if under n)."""

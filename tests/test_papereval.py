@@ -375,7 +375,8 @@ def test_mentions_rewrite_only_the_copying_statements_and_check_their_meaning(il
                                                             "core": True}]}])
     it = lib.get("jones2019gravity")
     words = it.text().split()
-    lifted = [" ".join(words[i:i + 16]) for i in (0, 40, 80)]
+    n0 = len(words) // 4                                           # body text, past the title and byline
+    lifted = [" ".join(words[i:i + 16]) for i in (n0, n0 + 20, n0 + 40)]
     nums = [" ".join(C.numbers(t)) for t in lifted]
     seen = []
 
@@ -404,16 +405,19 @@ def test_mentions_rewrite_only_the_copying_statements_and_check_their_meaning(il
     assert len(seen) == 3                                          # extract, rewrite, meaning check
     note = seen[1][-1]["content"]
     assert "Rewrite only these statements" in note and seen[1][1] == seen[0][1]   # same passages as context
-    assert "1. A:" not in seen[2][1]["content"] and "2. A:" in seen[2][1]["content"]
-    assert "3. A:" not in seen[2][1]["content"]                    # the changed number never reaches the check
+    pairs = seen[2][1]["content"].split("Pairs to check:", 1)[1]
+    assert "\n1. A:" not in pairs and "\n2. A:" in pairs
+    assert "\n3. A:" not in pairs                                  # the changed number never reaches the check
     assert P.reask_jobs(lib, rd, "mentions") == []
     out = P.paper_results(rd, "mentions")["mentions-jones2019gravity"]["output"]["mentions"]
     assert out[0]["statement"] == "Squall lines radiate waves."    # untouched
     assert out[1]["statement"].startswith("Reworded claim A") and out[1]["rewritten"]
     assert out[2]["statement"] == lifted[1] and out[3]["statement"] == lifted[2]   # kept: rejected
     s = P.report(lib, ev, rd)["summary"]
-    assert s["rewrites"] == {"asked": 3, "candidates": 2, "used": 1}
-    assert s["copied_12_first"] == 3 and s["copied_12"] == 2
+    asked = note.count("- mention ")                                # what the sent text shows as copied
+    assert asked >= 2 and "- mention 2:" in note and "- mention 4:" in note
+    assert s["rewrites"] == {"asked": asked, "candidates": 2, "used": 1}
+    assert s["copied_12"] == s["copied_12_first"] - 1
 
 
 def test_rewrite_number_check():

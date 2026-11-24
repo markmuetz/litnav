@@ -31,7 +31,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from . import batch_runner, localmodel, spool_runner
+from . import batch_runner, copyfix, localmodel, spool_runner
 from .util import atomic_write
 
 
@@ -120,6 +120,7 @@ def push(lib, jobs: list | None = None, *, kind: str = "queue", meta: dict | Non
     sp = _spool(cfg)
     _ssh(cfg, f"mkdir -p {sp}/inbox {sp}/running {sp}/done {sp}/logs && chmod 700 {sp}")
     _rsync(str(Path(batch_runner.__file__)), _rpath(cfg, "run_jobs.py"))
+    _rsync(str(Path(copyfix.__file__)), _rpath(cfg, "copyfix.py"))
     _rsync(str(Path(spool_runner.__file__)), _rpath(cfg, "run_spool.py"))
     _rsync(str(d) + "/", _rpath(cfg, f"inbox/{bid}.part/"))
     _ssh(cfg, f"mv {sp}/inbox/{bid}.part {sp}/inbox/{bid}")
@@ -208,7 +209,9 @@ def _apply(lib, bid, b, d, *, log) -> int:
             r = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if r.get("id") in jobs and r["id"] not in done and r.get("ok"):
+        rid = r.get("id") or ""
+        known = rid in jobs or (rid.endswith(("-r", "-c")) and rid[:-2] in jobs)    # a follow-up run on the node
+        if known and rid not in done and r.get("ok"):
             fresh.append(r)
             done.add(r["id"])
     server = json.loads((d / "server.json").read_text()) if (d / "server.json").is_file() else None
@@ -221,6 +224,8 @@ def _apply(lib, bid, b, d, *, log) -> int:
     else:
         applied = set()
         for r in fresh:
+            if r["id"] not in jobs:                  # follow-ups belong to eval batches only
+                continue
             s = localmodel.apply_result(lib, jobs[r["id"]], r, via="batch")
             if s.get("rephrase"):                   # copied from the paper: the next batch asks again
                 localmodel.enqueue(lib, [s["rephrase"]])

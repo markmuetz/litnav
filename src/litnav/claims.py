@@ -175,7 +175,9 @@ def jobs(lib, it, *, budget: int = GROUP_CHARS, prefix: str = "mentions") -> lis
         out.append({"id": f"{prefix}-{it.key}--g{n:02d}", "kind": "eval", "task": "mentions", "key": it.key,
                     "group": n, "schema": schema(ids), "messages": messages(it, ctx, g), "passages": ids,
                     "sections": sorted({r.get("section_title") or r["kind"] for r in g}),
-                    "chars_sent": sum(len(r["text"]) for r in g)})
+                    "chars_sent": sum(len(r["text"]) for r in g),
+                    # the runner rewrites copying statements and checks them in the same run (copyfix)
+                    "followup": "mentions", "title": it.title or ""})
     return out
 
 
@@ -299,122 +301,8 @@ def copied(it, out: dict) -> list[dict]:
     return bad
 
 
-# A statement that copies the paper is rewritten on its own, not by asking for
-# the whole reply again (which can change mentions that were fine). The call
-# continues the conversation that wrote it, so the model has the same passages
-# for context. A rewrite is used only if it keeps the statement's numbers and a
-# second call (MEANING_SYSTEM) finds it says the same as the original; anything
-# else keeps the original, which production then drops (drop_copied).
-
-REWRITE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["rewrites"], "properties": {
-    "rewrites": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                            "required": ["n", "statement"],
-                                            "properties": {"n": {"type": "integer"},
-                                                           "statement": {"type": "string"}}}}}}
-MEANING_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["checks"], "properties": {
-    "checks": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                          "required": ["n", "verdict", "reason"],
-                                          "properties": {"n": {"type": "integer"},
-                                                         "verdict": {"enum": ["same", "different"]},
-                                                         "reason": {"type": "string"}}}}}}
-MEANING_SYSTEM = (
-    "You check rewritten statements for a claim graph. Each pair has an original statement (A), taken from "
-    "the passages given, and a rewrite of it in other words (B). For each pair: same, if B says exactly "
-    "what A says: the same numbers and units, the same direction of each effect, the same conditions, the "
-    "same strength (hedging), nothing added and nothing left out; otherwise different. Judge from the "
-    "passages, not from what you know. Give a short reason. Reply with JSON only.")
-
-
-def _facts(m: dict) -> str:
-    v = m.get("value") or {}
-    val = " ".join(str(v.get(k) or "") for k in ("value", "units")).strip()
-    bits = [f"claim type {m.get('claim_type')}", f"hedging {m.get('hedging')}"]
-    if m.get("conditions"):
-        bits.append(f"conditions: {m['conditions']}")
-    if val:
-        bits.append(f"value: {val}")
-    return "; ".join(bits)
-
-
-def rephrase_job(job: dict, out: dict, bad: list[dict]) -> dict:
-    """The same call, continued: the model sees its reply, which statements
-    copied which words, and rewrites only those (REWRITE_SCHEMA)."""
-    ms = (out or {}).get("mentions") or []
-    lines = "\n".join(
-        f"- mention {b['n']}: \"{ms[b['n'] - 1].get('statement', '')}\"\n  copied words: \"{b['words']}\"\n"
-        f"  its record: {_facts(ms[b['n'] - 1])}" for b in bad if 0 < b["n"] <= len(ms))
-    note = ("These statements copy runs of words from the passages:\n" + lines + "\n\n"
-            "Rewrite only these statements, in your own words, using the passages above for context. Each must "
-            "say exactly what it said before: the same numbers with their units, the same direction of each "
-            "effect, the same conditions, and the same hedging, matching its record. Do not add or drop "
-            "anything. Names of models, datasets, places and campaigns may stay. Reply with JSON only: "
-            "{\"rewrites\": [{\"n\": <mention number>, \"statement\": \"...\"}]}")
-    return {**job, "id": f"{job['id']}-r", "rephrased": True, "rewrite": [b["n"] for b in bad],
-            "schema": REWRITE_SCHEMA,
-            "messages": job["messages"] + [{"role": "assistant", "content": json.dumps(out, ensure_ascii=False)},
-                                           {"role": "user", "content": note}]}
-
-
-_NUM = re.compile(r"\d+(?:[.,]\d+)*")
-
-
-def numbers(text: str) -> list[str]:
-    """The numbers in a statement, normalised (1,000 and 1000 are the same)."""
-    return sorted(n.replace(",", "") for n in _NUM.findall(text or ""))
-
-
-def rewrite_problem(old: str, new: str) -> str:
-    """Why a rewrite can't be used, checked by code; '' if it can."""
-    if not (new or "").strip():
-        return "empty"
-    if numbers(old) != numbers(new):
-        return f"numbers changed: {numbers(old)} -> {numbers(new)}"
-    if new.strip() == old.strip():
-        return "unchanged"
-    return ""
-
-
-def candidate_rewrites(out: dict, again: dict, asked: list[int]) -> dict[int, str]:
-    """Rewrites that pass the code checks, by mention number."""
-    ms = (out or {}).get("mentions") or []
-    got = {}
-    for r in (again or {}).get("rewrites") or []:
-        n = r.get("n")
-        if isinstance(n, int) and n in asked and 0 < n <= len(ms) and n not in got:
-            if not rewrite_problem(ms[n - 1].get("statement", ""), r.get("statement", "")):
-                got[n] = r["statement"].strip()
-    return got
-
-
-def meaning_job(job: dict, out: dict, rewrites: dict[int, str]) -> dict:
-    """A fresh call that checks each rewrite against its original, with the
-    same passages the original was written from."""
-    ms = out["mentions"]
-    pairs = "\n".join(f"{n}. A: {ms[n - 1].get('statement', '')}\n   B: {t}" for n, t in sorted(rewrites.items()))
-    user = job["messages"][-1]["content"] if job["messages"][-1]["role"] == "user" else ""
-    for m in job["messages"]:
-        if m["role"] == "user":
-            user = m["content"]
-            break
-    return {**job, "id": f"{job['id']}-c", "meaning_check": sorted(rewrites), "schema": MEANING_SCHEMA,
-            "messages": [{"role": "system", "content": MEANING_SYSTEM},
-                         {"role": "user", "content": f"{user}\n\nPairs to check:\n{pairs}\n\nReply with JSON only."}]}
-
-
-def merge_rewrites(out: dict, again: dict, asked: list[int], checks: dict | None,
-                   checked: list[int] | None = None) -> tuple[dict, dict]:
-    """The reply with the rewrites the meaning check called 'same' put in
-    place; every other mention exactly as it was. Returns (output, counts).
-    `checked`: the numbers sent to the check (rewrites that still copied were not)."""
-    cand = candidate_rewrites(out, again, asked)
-    if checked is not None:
-        cand = {n: t for n, t in cand.items() if n in checked}
-    verdict = {c.get("n"): c.get("verdict") for c in (checks or {}).get("checks") or []}
-    use = {n: t for n, t in cand.items() if verdict.get(n) == "same"}
-    ms = [dict(m) for m in (out or {}).get("mentions") or []]
-    for n, t in use.items():
-        ms[n - 1] = {**ms[n - 1], "statement": t, "rewritten": True}
-    return {**(out or {}), "mentions": ms}, {"asked": len(asked), "candidates": len(cand), "used": len(use)}
+from .copyfix import (MEANING_SCHEMA, MEANING_SYSTEM, REWRITE_SCHEMA, candidate_rewrites,  # noqa: E402,F401
+                      meaning_job, merge_rewrites, numbers, rephrase_job, rewrite_problem)
 
 
 def drop_copied(it, recs: list[dict], quotes: list[dict]) -> tuple[list[dict], list[dict], int]:

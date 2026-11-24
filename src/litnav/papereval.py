@@ -299,7 +299,7 @@ def reask_jobs(lib, run_dir: Path, task: str) -> list[dict]:
             again, first = res.get(rid, {}), res.get(j["id"], {})
             if f"{j['id']}-c" in res or not (again.get("ok") and isinstance(again.get("output"), dict)):
                 continue
-            asked = (rjobs.get(rid) or {}).get("rewrite")
+            asked = (rjobs.get(rid) or {}).get("rewrite") or again.get("rewrite")
             if not asked or "rewrites" not in again["output"]:
                 continue                      # an old whole-reply re-ask: nothing to check
             cand = claims.candidate_rewrites(first.get("output"), again["output"], asked)
@@ -573,9 +573,11 @@ def paper_results(run_dir: Path, task: str) -> dict:
                 and "rewrites" in again["output"] and isinstance(first.get("output"), dict)):
             chk = res.get(f"{j['id']}-c", {})
             merged, rw = claims.merge_rewrites(first["output"], again["output"],
-                                               (rjobs.get(f"{j['id']}-r") or {}).get("rewrite") or [],
+                                               (rjobs.get(f"{j['id']}-r") or {}).get("rewrite")
+                                               or again.get("rewrite") or [],
                                                chk.get("output") if chk.get("ok") else None,
-                                               (rjobs.get(f"{j['id']}-c") or {}).get("meaning_check"))
+                                               (rjobs.get(f"{j['id']}-c") or {}).get("meaning_check")
+                                               or chk.get("meaning_check"))
             again = {**first, "output": merged,
                      "seconds": (first.get("seconds") or 0) + (again.get("seconds") or 0)
                      + (chk.get("seconds") or 0)}

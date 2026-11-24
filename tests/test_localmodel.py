@@ -122,7 +122,7 @@ def test_batch_round_trip(ilib, monkeypatch, tmp_path):
     assert len(localmodel.queued(lib)) == 3
     out = tmp_path / "batch1"
     assert cli.main(["-L", str(lib.root), "queue", "export", str(out)]) == 0
-    assert {p.name for p in out.iterdir()} == {"jobs.jsonl", "run_jobs.py", "orchid.slurm", "README.txt"}
+    assert {p.name for p in out.iterdir()} == {"jobs.jsonl", "run_jobs.py", "copyfix.py", "orchid.slurm", "README.txt"}
     # on the cluster: the copied runner, standard library only, against a fake server
     FakeModel(monkeypatch, lambda msgs: SUMMARY if "Summarize" in msgs[1]["content"] else
               {"verdict": "supported", "confidence": "medium", "passage": "", "explanation": "e",

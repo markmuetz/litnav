@@ -463,6 +463,7 @@ home or group workspace) and delete it once the results are back.
 
   jobs.jsonl      the jobs
   run_jobs.py     the runner (Python 3 standard library only)
+  copyfix.py      used by the runner: rewrites statements that copy the paper, in the same run
   orchid.slurm    a SLURM template: check its #SBATCH lines first
   results.jsonl   written by the runner; a rerun resumes
 
@@ -486,6 +487,8 @@ def export(lib, out: Path, *, model: str = "") -> int:
         raise FileExistsError(f"{out}/jobs.jsonl exists: export into a new folder")
     atomic_write(out / "jobs.jsonl", "".join(json.dumps(j, ensure_ascii=False) + "\n" for j in jobs))
     shutil.copyfile(Path(batch_runner.__file__), out / "run_jobs.py")
+    from . import copyfix
+    shutil.copyfile(Path(copyfix.__file__), out / "copyfix.py")
     model = model or lib.local_model.get("batch_model") or "Qwen/Qwen3-32B"
     (out / "orchid.slurm").write_text(SLURM.replace("@MODEL@", model), encoding="utf-8")
     (out / "README.txt").write_text(README % {"n": len(jobs), "date": dt.date.today().isoformat(),

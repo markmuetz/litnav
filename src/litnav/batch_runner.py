@@ -25,6 +25,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+try:
+    from . import copyfix
+except ImportError:                    # shipped beside this file as copyfix.py (or missing: no follow-ups)
+    try:
+        import copyfix  # noqa: E402
+    except ImportError:
+        copyfix = None
+
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 
 
@@ -83,10 +91,40 @@ def run_job(job: dict, url: str, model: str, **kw) -> dict:
         text, real = chat(url, model, job["messages"], schema=job.get("schema"), **kw)
         out = parse_json(text) if job.get("schema") else text
         return {"id": job["id"], "ok": True, "output": out, "model": real, "raw": text,
-                "seconds": round(time.time() - t0, 1)}
+                "seconds": round(time.time() - t0, 1), **_chain_fields(job)}
     except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
         return {"id": job["id"], "ok": False, "error": f"{type(e).__name__}: {e}"[:500], "model": model,
                 "raw": text, "seconds": round(time.time() - t0, 1)}
+
+
+def _chain_fields(job: dict) -> dict:
+    """A follow-up's own fields, kept with its result (which statements it rewrote or checked)."""
+    return {k: job[k] for k in ("rewrite", "meaning_check") if k in job}
+
+
+def _base(jid: str) -> str:
+    return jid[:-2] if jid.endswith(("-r", "-c")) else jid
+
+
+def load_results(results: Path) -> dict:
+    """The latest successful result by id (a failure only where nothing succeeded)."""
+    out = {}
+    if results.is_file():
+        for line in results.read_text("utf-8").splitlines():
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("id") and (r["id"] not in out or r.get("ok")):
+                out[r["id"]] = r
+    return out
+
+
+def followup(job: dict, results: dict) -> dict | None:
+    """The next follow-up for a job (copyfix.next_job), if the job asks for one."""
+    if copyfix is None or not job.get("followup"):
+        return None
+    return copyfix.next_job(job, results)
 
 
 def done_ids(results: Path) -> set[str]:
@@ -104,9 +142,19 @@ def done_ids(results: Path) -> set[str]:
 
 
 def todo_jobs(jobs: Path, results: Path) -> list:
+    """Jobs without a result, and the follow-ups due for jobs that have one
+    (so a run stopped part-way through a chain picks it up again)."""
     seen = done_ids(results)
-    return [j for j in (json.loads(l) for l in jobs.read_text("utf-8").splitlines() if l.strip())
-            if j["id"] not in seen]
+    all_ = [json.loads(l) for l in jobs.read_text("utf-8").splitlines() if l.strip()]
+    todo = [j for j in all_ if j["id"] not in seen]
+    if any(j.get("followup") for j in all_):
+        res = load_results(results)
+        for j in all_:
+            if j["id"] in seen:
+                nxt = followup(j, res)
+                if nxt and nxt["id"] not in seen:
+                    todo.append(nxt)
+    return todo
 
 
 def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | None = None,
@@ -116,6 +164,12 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
     jobs after limit_s seconds (a SLURM time limit) so a rerun can pick up;
     each result is written as it finishes."""
     todo = todo_jobs(jobs, results)
+    all_ = [json.loads(l) for l in jobs.read_text("utf-8").splitlines() if l.strip()]
+    chained = copyfix is not None and any(j.get("followup") for j in all_)
+    by_id = {j["id"]: j for j in all_}        # parents, to chain each follow-up from
+    res = load_results(results) if chained else {}
+    total = len(todo)
+    extra = []                                # follow-ups started as their parent finishes
     if results.is_file() and results.stat().st_size:
         with open(results, "rb") as f:          # a killed job can leave half a line: start a new one
             f.seek(-1, 2)
@@ -132,12 +186,14 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
             while not stopped and len(pending) < max(1, concurrency):
                 if limit_s and time.time() - t0 > limit_s:
                     stopped = True
-                    left = len(todo) - i
+                    left = total - i
                     if left:
                         log(f"time limit: {left} job(s) not started; rerun to continue")
                     break
-                job = next(it, None)
+                job = extra.pop(0) if extra else next(it, None)
                 if job is None:
+                    if pending:
+                        break                 # a running parent may still add a follow-up
                     stopped = True
                     break
                 i += 1
@@ -151,8 +207,15 @@ def run(jobs: Path, results: Path, url: str, model: str, *, limit_s: float | Non
                     f.write(json.dumps(r, ensure_ascii=False) + "\n")
                     f.flush()
                 n += r["ok"]
+                if chained:
+                    res[r["id"]] = r
+                    parent = by_id.get(_base(r["id"]))
+                    nxt = followup(parent, res) if parent and r["ok"] else None
+                    if nxt and not any(x["id"] == nxt["id"] for x in extra):
+                        extra.append(nxt)
+                        total += 1
                 rate = n / max(time.time() - t0, 1) * 3600
-                log(f"[{n}/{len(todo)}] {r['id']} {r['seconds']:.0f}s "
+                log(f"[{n}/{total}] {r['id']} {r['seconds']:.0f}s "
                     + ("ok" if r["ok"] else f"FAILED {r['error'][:120]}") + f" ({rate:.0f}/h)")
     return n
 
