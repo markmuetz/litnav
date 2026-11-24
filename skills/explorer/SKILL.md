@@ -12,6 +12,13 @@ description: Find papers the user does not have yet — works the library cites 
 | `litnav candidates [--min-cites N] [--add N]` | outside works cited by several library papers, with which papers cite them |
 | `litnav explore <keys> [--add N]` | Semantic Scholar recommendations for seed papers |
 | `litnav to-fetch [list\|add\|skip\|open N\|prune]` | the to-fetch list, `discovery/to-fetch.tsv` |
+| `litnav field build` / `forward` / `embed` | the field store: works the library cites (backward) and works citing many library papers (forward), with public abstracts, embedded locally |
+| `litnav field list [--kind K] [--set S]` | top field works; kinds research, review, dataset, model, project |
+| `litnav field search "<q>"` (MCP `search_field`) | semantic search over field abstracts; library papers come back marked held |
+| `litnav field map` | topic clusters, least-held first (`derived/field-map.md`): where the library is thin |
+| `litnav field want\|skip\|note <ids>` | decisions, kept in `discovery/field.tsv`; `want` also adds to to-fetch |
+
+Field works are abstract-only: say so, and never present one as read.
 
 Results flagged `[maybe held: <key>]` may already be in the library under
 another key or as a preprint: check before proposing them.
