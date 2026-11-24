@@ -168,15 +168,16 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
         ids = [l[1:].split("]")[0] for l in lines if l.startswith("[")]
         text = lines[1]
         if messages[0]["content"] == C.RUNS_SYSTEM:          # v4: the runs table first
-            return {"runs": [{"run_name": "CTRL", "model": "WRF", "version": "", "configuration": "",
+            return {"experiments": [{"kind": "model_run", "name": "CTRL", "region": "", "method": "",
+                                     "method_cited": "", "datasets": [], "model": "WRF", "version": "", "configuration": "",
                               "configuration_cited": "", "family": "physical", "horizontal_grid_spacing": "1 km",
                               "vertical_levels": "", "period": "", "domain": "idealized",
                               "coupling": "atmosphere_only", "ocean_model": "",
                               "components": [{"kind": "deep_convection", "state": "off", "scheme": "",
                                               "moments": "", "chunk": ids[0]}]}]}
-        assert "run_name 'CTRL': WRF, 1 km, idealized; deep convection: off" in messages[1]["content"]
+        assert "model run 'CTRL': WRF, 1 km, idealized; deep convection: off" in messages[1]["content"]
         m = {"statement": "Gravity waves radiate from squall lines.", "chunk": ids[0], "quote": text[:30],
-             "source": "text", "claim_type": "shown", "evidence": "model", "run": "CTRL",
+             "source": "text", "claim_type": "shown", "evidence": "model", "experiment_name": "CTRL",
              "experiment": {"model": "", "resolution": "", "method": "", "deep_convection_parametrized": "unknown",
                             "run_name": ""},
              "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
@@ -202,7 +203,7 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
     assert s["calls"] == len(jobs) and s["calls_at_cap"] == 0
     assert s["evidence_unknown"] == 0.0 and s["evidence_unknown_judge"] == 0.0
     out = P.paper_results(rd, "mentions")["mentions-jones2019gravity"]["output"]
-    assert out["runs"][0]["run_name"] == "CTRL"
+    assert out["runs"][0]["name"] == "CTRL"
     assert {C.evidence_type(m, out["runs"]) for m in out["mentions"]} == {"cpm"}   # scheme off, 1 km
 
 
@@ -329,8 +330,8 @@ def test_mentions_copying_is_reasked_and_logged(ilib, tmp_path, monkeypatch):
     seen = []
 
     def reply(messages):
-        if messages[0]["content"].startswith("You list the model runs"):   # v4 runs call
-            return {"runs": []}
+        if messages[0]["content"].startswith("You list the experiments"):   # v4 runs call
+            return {"experiments": []}
         seen.append(messages)
         ids = [l[1:].split("]")[0] for l in messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
                if l.startswith("[")]
@@ -398,8 +399,8 @@ def test_mentions_rewrite_only_the_copying_statements_and_check_their_meaning(il
     seen = []
 
     def reply(messages):
-        if messages[0]["content"].startswith("You list the model runs"):   # v4 runs call
-            return {"runs": []}
+        if messages[0]["content"].startswith("You list the experiments"):   # v4 runs call
+            return {"experiments": []}
         seen.append(messages)
         if messages[0]["content"] == C.MEANING_SYSTEM:
             return {"checks": [{"n": 2, "verdict": "same", "reason": "same claim"},
@@ -457,8 +458,8 @@ def test_a_rewrite_that_still_copies_is_not_checked(ilib, tmp_path, monkeypatch)
     seen = []
 
     def reply(messages):
-        if messages[0]["content"].startswith("You list the model runs"):   # v4 runs call
-            return {"runs": []}
+        if messages[0]["content"].startswith("You list the experiments"):   # v4 runs call
+            return {"experiments": []}
         seen.append(messages)
         if messages[0]["content"] == C.MEANING_SYSTEM:
             return {"checks": []}

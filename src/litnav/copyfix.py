@@ -235,17 +235,23 @@ RUNS_SLOT = "{{RUNS}}"
 
 
 def runs_table(runs: list[dict]) -> str:
-    """A paper's runs, one line each, for a section call's prompt."""
+    """A paper's experiments table, one line each, for a section call's prompt."""
     lines = []
     for r in runs or []:
+        name = r.get("name") or r.get("run_name") or ""
+        if r.get("kind") == "observational_analysis":
+            ds = ", ".join(" ".join(x for x in (d.get("name"), d.get("version")) if x) for d in r.get("datasets") or [])
+            bits = [x for x in (ds, r.get("method"), r.get("region"), r.get("period")) if x]
+            lines.append(f"- observational analysis '{name}': " + "; ".join(bits))
+            continue
         comps = "; ".join(
             f"{c.get('kind', '').replace('_', ' ')}: "
             + ({"off": "off", "not_stated": "not stated"}.get(c.get("state"), c.get("scheme") or "used"))
             for c in r.get("components") or [])
         head = ", ".join(x for x in (r.get("model"), r.get("configuration"), r.get("horizontal_grid_spacing"),
                                      r.get("domain")) if x)
-        lines.append(f"- run_name '{r.get('run_name', '')}': {head}" + (f"; {comps}" if comps else ""))
-    return "\n".join(lines) or "(no runs found in the methods)"
+        lines.append(f"- model run '{name}': {head}" + (f"; {comps}" if comps else ""))
+    return "\n".join(lines) or "(no experiments found in the methods)"
 
 
 def fill(job: dict, results: dict) -> dict:
@@ -256,7 +262,8 @@ def fill(job: dict, results: dict) -> dict:
         return job
     r = results.get(after) or {}
     out = r.get("output") if r.get("ok") else None
-    table = runs_table((out or {}).get("runs") if isinstance(out, dict) else None)
+    t = (out.get("experiments", out.get("runs")) if isinstance(out, dict) else None)
+    table = runs_table(t if isinstance(t, list) else None)
     msgs = [{**m, "content": m["content"].replace(RUNS_SLOT, table)} if m["role"] == "user" else m
             for m in job["messages"]]
     return {**job, "messages": msgs}

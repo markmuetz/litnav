@@ -96,11 +96,17 @@ def test_pull_imports_the_followups(tmp_path):
     assert got == ["mentions-k--g01", "mentions-k--g01-r", "mentions-k--g01-c"]
 
 
-RUN = {"run_name": "CTRL", "model": "UM", "version": "", "configuration": "RA2T", "configuration_cited": "",
+RUN = {"kind": "model_run", "name": "CTRL", "region": "", "method": "", "method_cited": "", "datasets": [],
+       "model": "UM", "version": "", "configuration": "RA2T", "configuration_cited": "",
        "family": "physical", "horizontal_grid_spacing": "2.2 km", "vertical_levels": "", "period": "",
        "domain": "limited_area", "coupling": "atmosphere_only", "ocean_model": "",
        "components": [{"kind": "deep_convection", "state": "off", "scheme": "", "moments": "", "chunk": "k#1"},
                       {"kind": "microphysics", "state": "used", "scheme": "CASIM", "moments": "2", "chunk": "k#1"}]}
+
+
+OBS = {"kind": "observational_analysis", "name": "radar cold pools", "region": "Oklahoma", "period": "2011",
+       "method": "tracking with TOBAC", "method_cited": "", "components": [], "family": "unknown",
+       "datasets": [{"name": "NEXRAD", "version": "Level II", "kind": "radar", "resolution": "", "chunk": "k#1"}]}
 
 
 def test_section_calls_wait_for_the_runs_table(tmp_path, monkeypatch):
@@ -111,11 +117,13 @@ def test_section_calls_wait_for_the_runs_table(tmp_path, monkeypatch):
     def chat(url, model, messages, schema=None, **kw):
         order.append(messages[0]["content"][:12])
         if messages[0]["content"] == C.RUNS_SYSTEM:
-            return json.dumps({"runs": [RUN]}), "m"
+            return json.dumps({"experiments": [RUN, OBS]}), "m"
         assert C.RUNS_SLOT not in messages[1]["content"]
-        assert "run_name 'CTRL': UM, RA2T, 2.2 km, limited_area; deep convection: off; microphysics: CASIM" \
+        assert "model run 'CTRL': UM, RA2T, 2.2 km, limited_area; deep convection: off; microphysics: CASIM" \
             in messages[1]["content"]
-        return json.dumps({"mentions": [{"statement": "Cold pools matter.", "run": "CTRL", "evidence": "model"}]}), "m"
+        assert "observational analysis 'radar cold pools': NEXRAD Level II; tracking with TOBAC" in messages[1]["content"]
+        return json.dumps({"mentions": [{"statement": "Cold pools matter.", "experiment_name": "CTRL",
+                                         "evidence": "model"}]}), "m"
     monkeypatch.setattr(batch_runner, "chat", chat)
     runs = {"id": "mentions-k--runs", "key": "k", "role": "runs", "schema": {"type": "object"},
             "messages": [{"role": "system", "content": C.RUNS_SYSTEM}, {"role": "user", "content": "Passages:\n"}]}
@@ -132,23 +140,27 @@ def test_section_calls_wait_for_the_runs_table(tmp_path, monkeypatch):
 
 def test_evidence_type_from_the_runs_table():
     from litnav import claims as C
-    ml = {**RUN, "run_name": "GC", "family": "machine_learning", "components": []}
-    param = {**RUN, "run_name": "GCM", "horizontal_grid_spacing": "100 km",
+    ml = {**RUN, "name": "GC", "family": "machine_learning", "components": []}
+    param = {**RUN, "name": "GCM", "horizontal_grid_spacing": "100 km",
              "components": [{"kind": "deep_convection", "state": "used", "scheme": "Gregory-Rowntree",
                              "moments": "", "chunk": ""}]}
-    les = {**RUN, "run_name": "LES", "horizontal_grid_spacing": "100 m"}
-    unknown = {**RUN, "run_name": "KM", "components": []}                    # scheme not stated
-    runs = [RUN, ml, param, les, unknown]
+    les = {**RUN, "name": "LES", "horizontal_grid_spacing": "100 m"}
+    unknown = {**RUN, "name": "KM", "components": []}                        # scheme not stated
+    old = {k: v for k, v in RUN.items() if k not in ("kind", "name")} | {"run_name": "OLD"}   # first-draft entry
+    runs = [RUN, ml, param, les, unknown, OBS, old]
     m = {"evidence": "model", "experiment": {}}
-    assert C.evidence_type({**m, "run": "ctrl"}, runs) == "cpm"              # names match without case
-    assert C.evidence_type({**m, "run": "GC"}, runs) == "unknown"
-    assert C.evidence_type({**m, "run": "GCM"}, runs) == "parametrized_model"
-    assert C.evidence_type({**m, "run": "LES"}, runs) == "les"
-    assert C.evidence_type({**m, "run": "KM"}, runs) == "unknown"
-    assert C.evidence_type({**m, "run": "other"}, runs) == "unknown"         # falls back to its own facts
-    assert C.evidence_type({"evidence": "observations", "run": "CTRL"}, runs) == "observations"
-    recs, _ = C.records("k", [{"mentions": [{**m, "run": "ctrl", "statement": "s"}]}], {}, runs=runs)
-    assert recs[0]["run_name"] == "CTRL" and recs[0]["evidence_type"] == "cpm"
+    ex = lambda name, **kw: {**m, "experiment_name": name, **kw}
+    assert C.evidence_type(ex("ctrl"), runs) == "cpm"                        # names match without case
+    assert C.evidence_type(ex("GC"), runs) == "unknown"
+    assert C.evidence_type(ex("GCM"), runs) == "parametrized_model"
+    assert C.evidence_type(ex("LES"), runs) == "les"
+    assert C.evidence_type(ex("KM"), runs) == "unknown"
+    assert C.evidence_type(ex("OLD"), runs) == "cpm"
+    assert C.evidence_type(ex("other"), runs) == "unknown"                   # falls back to its own facts
+    assert C.evidence_type(ex("radar cold pools"), runs) == "unknown"        # not a model run
+    assert C.evidence_type(ex("radar cold pools", evidence="observations"), runs) == "observations"
+    recs, _ = C.records("k", [{"mentions": [{**ex("ctrl"), "statement": "s"}]}], {}, runs=runs)
+    assert recs[0]["experiment_name"] == "CTRL" and recs[0]["evidence_type"] == "cpm"
 
 
 def test_methods_rows_pick_the_methods():

@@ -45,12 +45,15 @@ COMPONENT_KINDS = ["deep_convection", "shallow_convection", "microphysics", "bou
 COMPONENT_STATES = ["used", "off", "not_stated"]
 MODEL_FAMILIES = ["physical", "machine_learning", "hybrid", "unknown"]
 DOMAINS = ["global", "limited_area", "idealized", "single_column", "unknown"]
+EXPERIMENT_KINDS = ["model_run", "observational_analysis"]
+DATASET_KINDS = ["satellite", "radar", "in_situ", "station", "field_campaign", "reanalysis", "model_output",
+                 "other"]
 COUPLINGS = ["atmosphere_only", "coupled", "unknown"]
-MAX_RUNS = 20
-RUNS_CHARS = 40_000             # methods passages for the runs call
+MAX_RUNS = 20                   # entries in the experiments table
+RUNS_CHARS = 40_000             # methods passages for the experiments call
 _METHODS = re.compile(r"method|model|experiment|simulat|set-?up|configur|design|numerical|data|"
                       r"\brun|framework|approach", re.I)
-RUNS_SLOT = "{{RUNS}}"          # where a section call's prompt takes the paper's runs table
+RUNS_SLOT = "{{RUNS}}"          # where a section call's prompt takes the paper's experiments table
 
 SYSTEM = (
     "You extract the claims an academic paper makes, for a claim graph that links claims across papers. "
@@ -75,10 +78,10 @@ SYSTEM = (
     "- evidence: what the claim rests on (for a restated claim, the cited work's): observations, "
     "reanalysis, model (any numerical simulation), theory, mixed, or unknown if the passages don't say: "
     "don't guess.\n"
-    "- run: if the claim rests on a model run of this paper, that run's run_name from the runs table given "
-    "above the passages, exactly as written there; '' otherwise (for restated claims, and for runs not in the "
-    "table).\n"
-    "- experiment, only for a model run not in the runs table ('' or unknown otherwise, or if not stated): the model; "
+    "- experiment_name: if the claim rests on a model run or observational analysis of this paper, its name "
+    "from the experiments table given above the passages, exactly as written there; '' otherwise (for "
+    "restated claims, and for experiments not in the table).\n"
+    "- experiment, only for a model run not in the experiments table ('' or unknown otherwise, or if not stated): the model; "
     "resolution: the horizontal grid spacing as written (e.g. '2.2 km', '250 m', '0.25 degrees'); "
     "method; deep_convection_parametrized: yes if the run uses a deep-convection (cumulus) scheme, no "
     "if convection is explicit, unknown if not stated; run_name: the paper's own name for the kind of "
@@ -103,7 +106,7 @@ def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
             "source": {"type": "string", "enum": SOURCES},
             "claim_type": {"type": "string", "enum": CLAIM_TYPES},
             "evidence": {"type": "string", "enum": EVIDENCE_KINDS},
-            "run": s,
+            "experiment_name": s,
             "experiment": {"type": "object", "properties": {
                 "model": s, "resolution": s, "method": s,
                 "deep_convection_parametrized": {"type": "string", "enum": YNU}, "run_name": s},
@@ -117,54 +120,83 @@ def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
             "hedge_words": s,
             "value": {"type": "object", "properties": {"value": s, "units": s, "low": s, "high": s},
                       "required": ["value", "units", "low", "high"], "additionalProperties": False}},
-        "required": ["statement", "chunk", "quote", "source", "claim_type", "evidence", "run", "experiment",
+        "required": ["statement", "chunk", "quote", "source", "claim_type", "evidence", "experiment_name", "experiment",
                      "conditions", "hedging", "hedge_words", "value"],
         "additionalProperties": False}}}, "required": ["mentions"], "additionalProperties": False}
 
 
 RUNS_SYSTEM = (
-    "You list the model runs an academic paper reports, for a claim graph that compares results across "
-    "models. You see the paper's title and abstract, then numbered passages from its methods and model "
-    "description. List each distinct run or set of runs the paper itself makes (not runs of other work it "
-    "only cites). For each:\n"
-    "- run_name: the paper's own name for it, as written (e.g. '295dT1p25', 'CTRL', 'N2560 GAL9'); if it "
-    "has none, a short description ('the 2.2 km convection-permitting run').\n"
-    "- model, version, configuration: as written ('' if not stated), e.g. 'Met Office Unified Model', "
-    "'vn11.1', 'RA2T'. configuration_cited: the reference the paper gives for the configuration (author "
-    "and year as written), '' if none.\n"
-    "- family: physical (a numerical model solving equations), machine_learning (a data-driven model such "
-    "as GraphCast), hybrid, or unknown.\n"
-    "- horizontal_grid_spacing, vertical_levels, period: as written ('' if not stated). domain: global, "
-    "limited_area, idealized, single_column or unknown. coupling: atmosphere_only, coupled or unknown; "
-    "ocean_model as written ('' if none).\n"
-    "- components: one entry for each kind: " + ", ".join(COMPONENT_KINDS) + ". For each: state used "
-    "(the run has such a scheme), off (the paper says it is switched off or resolved explicitly), or "
-    "not_stated (the paper doesn't say: don't guess from what such models usually have); scheme: its name "
-    "as written ('' if not stated); moments: for microphysics, the number of moments if stated ('' "
-    "otherwise); chunk: the id of the passage that says so ('' if not stated).\n"
+    "You list the experiments an academic paper reports, for a claim graph that compares results across "
+    "models and observations. You see the paper's title and abstract, then numbered passages from its "
+    "methods, data and model description. List each distinct experiment the paper itself makes (not those "
+    "of other work it only cites): each model run or set of runs, and each observational analysis (an "
+    "analysis of observations, reanalysis or archived model output). For each:\n"
+    "- kind: model_run or observational_analysis. name: the paper's own name for it, as written (e.g. "
+    "'295dT1p25', 'CTRL', 'N2560 GAL9'); if it has none, a short description ('the 2.2 km "
+    "convection-permitting run', 'the CloudSat compositing analysis').\n"
+    "- region, period: as written ('' if not stated).\n"
+    "- method: for an observational analysis, how the data are analysed, as written (e.g. 'tracking with "
+    "PyFLEXTRKR', 'compositing on rain rate', 'a 10 mm/h threshold'); method_cited: the reference given for "
+    "it ('' if none). '' for a model run unless it is analysed in a named way.\n"
+    "- datasets: for an observational analysis, each dataset it uses: name and version as written (e.g. "
+    "'CloudSat 2B-GEOPROF', 'R05'; 'ERA5', ''); kind (" + ", ".join(DATASET_KINDS) + "); resolution as "
+    "written ('' if not stated); chunk: the id of the passage that names it. A model run's forcing or "
+    "evaluation data can be listed too. An empty list if none.\n"
+    "- For a model run (all '' or unknown, and components an empty list, for an observational analysis): "
+    "model, version, configuration: as written ('' if not stated), e.g. 'Met Office Unified Model', "
+    "'vn11.1', 'RA2T'. configuration_cited: the reference the paper gives for the configuration (author and "
+    "year as written), '' if none. family: physical (a numerical model solving equations), machine_learning "
+    "(a data-driven model such as GraphCast), hybrid, or unknown. horizontal_grid_spacing, vertical_levels: "
+    "as written ('' if not stated). domain: global, limited_area, idealized, single_column or unknown. "
+    "coupling: atmosphere_only, coupled or unknown; ocean_model as written ('' if none).\n"
+    "- components, for a model run: one entry for each kind: " + ", ".join(COMPONENT_KINDS) + ". For each: "
+    "state used (the run has such a scheme), off (the paper says it is switched off or resolved "
+    "explicitly), or not_stated (the paper doesn't say: don't guess from what such models usually have); "
+    "scheme: its name as written ('' if not stated); moments: for microphysics, the number of moments if "
+    "stated ('' otherwise); chunk: the id of the passage that says so ('' if not stated).\n"
     "A run whose deep convection is not described is not_stated, even if the paper calls it "
-    "convection-permitting, storm-resolving or km-scale: say it in run_name, not in the components. "
-    "Reply with JSON only.")
+    "convection-permitting, storm-resolving or km-scale: say it in name, not in the components. A paper "
+    "with neither (pure theory, a review) has an empty list. Reply with JSON only.")
 
 
 def runs_schema(ids: list[str]) -> dict:
     s = {"type": "string"}
+    chunk = {"type": "string", "enum": ids + [""]}
     comp = {"type": "object", "additionalProperties": False,
             "required": ["kind", "state", "scheme", "moments", "chunk"],
             "properties": {"kind": {"type": "string", "enum": COMPONENT_KINDS},
                            "state": {"type": "string", "enum": COMPONENT_STATES},
-                           "scheme": s, "moments": s, "chunk": {"type": "string", "enum": ids + [""]}}}
-    run = {"type": "object", "additionalProperties": False, "properties": {
-        "run_name": s, "model": s, "version": s, "configuration": s, "configuration_cited": s,
-        "family": {"type": "string", "enum": MODEL_FAMILIES},
-        "horizontal_grid_spacing": s, "vertical_levels": s, "period": s,
-        "domain": {"type": "string", "enum": DOMAINS}, "coupling": {"type": "string", "enum": COUPLINGS},
-        "ocean_model": s, "components": {"type": "array", "items": comp}},
-        "required": ["run_name", "model", "version", "configuration", "configuration_cited", "family",
-                     "horizontal_grid_spacing", "vertical_levels", "period", "domain", "coupling",
-                     "ocean_model", "components"]}
-    return {"type": "object", "additionalProperties": False, "required": ["runs"],
-            "properties": {"runs": {"type": "array", "maxItems": MAX_RUNS, "items": run}}}
+                           "scheme": s, "moments": s, "chunk": chunk}}
+    ds = {"type": "object", "additionalProperties": False, "required": ["name", "version", "kind", "resolution",
+                                                                          "chunk"],
+          "properties": {"name": s, "version": s, "kind": {"type": "string", "enum": DATASET_KINDS},
+                         "resolution": s, "chunk": chunk}}
+    fields = {"kind": {"type": "string", "enum": EXPERIMENT_KINDS}, "name": s, "region": s, "period": s,
+              "method": s, "method_cited": s, "datasets": {"type": "array", "items": ds},
+              "model": s, "version": s, "configuration": s, "configuration_cited": s,
+              "family": {"type": "string", "enum": MODEL_FAMILIES},
+              "horizontal_grid_spacing": s, "vertical_levels": s,
+              "domain": {"type": "string", "enum": DOMAINS}, "coupling": {"type": "string", "enum": COUPLINGS},
+              "ocean_model": s, "components": {"type": "array", "items": comp}}
+    ex = {"type": "object", "additionalProperties": False, "properties": fields, "required": list(fields)}
+    return {"type": "object", "additionalProperties": False, "required": ["experiments"],
+            "properties": {"experiments": {"type": "array", "maxItems": MAX_RUNS, "items": ex}}}
+
+
+def table(out: dict | None) -> list[dict] | None:
+    """A reply's experiments table (v4; 'runs' in the first draft), or None if it has none."""
+    if not isinstance(out, dict):
+        return None
+    t = out.get("experiments", out.get("runs"))
+    return t if isinstance(t, list) else None
+
+
+def entry_name(e: dict) -> str:
+    return (e.get("name") or e.get("run_name") or "").strip()
+
+
+def mention_experiment(m: dict) -> str:
+    return m.get("experiment_name") or m.get("run") or ""
 
 
 def component(run: dict, kind: str) -> dict:
@@ -180,7 +212,7 @@ def find_run(runs: list[dict] | None, name: str) -> dict | None:
     if not k:
         return None
     for r in runs or []:
-        if (r.get("run_name") or "").strip().lower() == k:
+        if entry_name(r).lower() == k:
             return r
     return None
 
@@ -328,7 +360,7 @@ def records(key: str, replies: list[dict], chunk_info: dict, *, run: str = "",
                 "statement": m.get("statement", ""), "source": m.get("source"),
                 "claim_type": m.get("claim_type"), "evidence_type": evidence_type(m, runs),
                 "evidence_rule": EVIDENCE_RULE, "evidence": m.get("evidence"),
-                "run_name": (find_run(runs, m.get("run", "")) or {}).get("run_name", ""),
+                "experiment_name": entry_name(find_run(runs, mention_experiment(m)) or {}),
                 "experiment": {**(m.get("experiment") or {}),
                                "grid_spacing_m": grid_spacing_m((m.get("experiment") or {}).get("resolution"))},
                 "conditions": m.get("conditions") or {},
@@ -386,7 +418,7 @@ def run_facts(run: dict) -> dict:
     """What the evidence rule needs from a runs-table entry, as v3 facts."""
     dc = component(run, "deep_convection")["state"]
     return {"model": run.get("model", ""), "resolution": run.get("horizontal_grid_spacing", ""),
-            "method": "", "run_name": run.get("run_name", ""),
+            "method": "", "run_name": entry_name(run),
             "deep_convection_parametrized": {"used": "yes", "off": "no"}.get(dc, "unknown"),
             "family": run.get("family", "unknown")}
 
@@ -395,12 +427,12 @@ def evidence_type(m: dict, runs: list[dict] | None = None) -> str:
     """With a runs table (v4), a mention naming a run takes that run's facts;
     a machine-learning model has no class under rule 1 (unknown)."""
     if m.get("evidence") == "model" and runs is not None:
-        r = find_run(runs, m.get("run", ""))
-        if r:
+        r = find_run(runs, mention_experiment(m))
+        if r and r.get("kind", "model_run") == "model_run":
             f = run_facts(r)
             if f["family"] == "machine_learning":
                 return "unknown"
-            return evidence_type({**m, "run": "", "experiment": f})
+            return evidence_type({**m, "run": "", "experiment_name": "", "experiment": f})
     return _evidence_type_v3(m)
 
 
