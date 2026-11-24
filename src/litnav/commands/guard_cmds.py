@@ -17,6 +17,8 @@ def add(sub):
     p.add_argument("keys", nargs="*")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--recheck", action="store_true", help="look up papers already checked")
+    p.add_argument("--from-text", action="store_true", help="instead, look for the licence line "
+                   "in licensed papers' own text (local; reports codes only, never text)")
     p.set_defaults(func=cmd_licences)
 
     p = sub.add_parser("abstracts", help="fetch public abstracts (OpenAlex, Semantic Scholar, "
@@ -58,8 +60,12 @@ def cmd_licences(a):
     from .. import licences
     from ..net import Client
     lib = Library.find(a.library)
-    c = licences.run(lib, Client.for_library(lib), apply=a.apply, recheck=a.recheck,
-                     keys=a.keys or None, log=lambda m: print(m, file=sys.stderr))
+    if a.from_text:
+        c = licences.run_text(lib, apply=a.apply, keys=a.keys or None,
+                              log=lambda m: print(m, file=sys.stderr))
+    else:
+        c = licences.run(lib, Client.for_library(lib), apply=a.apply, recheck=a.recheck,
+                         keys=a.keys or None, log=lambda m: print(m, file=sys.stderr))
     print("  " + "  ".join(f"{k}={v}" for k, v in c.items()), file=sys.stderr)
     if not a.apply:
         print("dry run; --apply to record the licences and mark the open ones", file=sys.stderr)

@@ -110,3 +110,82 @@ def run(lib, client, *, apply=False, recheck=False, keys=None, log=print) -> dic
             log(f"  [{i}/{len(todo)}] {it.key}: {found[0]}" + (" -> open" if st == "open" else
                                                               " (not in [licences] open)"))
     return counts
+
+
+# -- the licence line in the paper's own text (`litnav licences --from-text`)
+# Runs locally; reports only a code and whether the line licenses the article
+# itself, never the text around it.
+
+_PHRASE = re.compile(r"creative\s*commons|creativecommons\.org|\bCC[\s-]?BY\b", re.I)
+# words that say the licence is the article's own
+_ARTICLE = re.compile(r"(open[\s-]access|this|the)\s+(article|paper|work|publication|"
+                      r"manuscript|contribution)|distributed\s+under|licensed\s+under|"
+                      r"published\s+under|terms\s+of\s+the", re.I)
+# words that say it is about something else
+_OTHER = re.compile(r"\b(data|dataset|datasets|code|software|images?|figure|map|photo|"
+                    r"output|model output|repository|zenodo)\b", re.I)
+_NAMED = [("by-nc-nd", r"attribution[\s-]*non[\s-]?commercial[\s-]*no[\s-]?deriv|by[\s-]nc[\s-]nd"),
+          ("by-nc-sa", r"attribution[\s-]*non[\s-]?commercial[\s-]*share[\s-]?alike|by[\s-]nc[\s-]sa"),
+          ("by-nc", r"attribution[\s-]*non[\s-]?commercial|by[\s-]nc\b"),
+          ("by-nd", r"attribution[\s-]*no[\s-]?deriv|by[\s-]nd\b"),
+          ("by-sa", r"attribution[\s-]*share[\s-]?alike|by[\s-]sa\b"),
+          ("cc0", r"\bcc0\b|cc\s*zero|public\s+domain\s+dedication"),
+          ("by", r"attribution|\bcc[\s-]?by\b")]
+
+
+def from_text(text: str) -> tuple[str, str] | None:
+    """(code, 'article' or 'mention') for the strongest CC statement in a
+    paper's text, or None. 'article' means the wording licenses the paper
+    itself; 'mention' is any other (data, code, a figure, a reference)."""
+    t = " ".join(text.split())
+    best_ = None
+    for m in _PHRASE.finditer(t):
+        win = t[max(0, m.start() - 250): m.end() + 250]
+        url = CC.search(win)
+        c = code(url.group(0)) if url else None
+        if not c:
+            for name, pat in _NAMED:
+                if re.search(pat, win, re.I):
+                    c = name
+                    break
+        if not c:
+            continue
+        near = t[max(0, m.start() - 160): m.end() + 60]
+        kind = "article" if _ARTICLE.search(near) and not _OTHER.search(near) else "mention"
+        if kind == "article":
+            return c, kind
+        best_ = best_ or (c, kind)
+    return best_
+
+
+def run_text(lib, *, apply=False, keys=None, log=print) -> dict:
+    """Check licensed papers' own text for their CC licence line."""
+    opens = open_codes(lib)
+    items = [lib.get(k) for k in keys] if keys else list(lib.items())
+    counts = {"open": 0, "cc-other": 0, "mention": 0, "none": 0, "no-text": 0}
+    for it in items:
+        if it.sharing != "licensed":
+            continue
+        if not it.has_text:
+            counts["no-text"] += 1
+            continue
+        got = from_text(it.text())
+        if not got:
+            counts["none"] += 1
+            continue
+        c, kind = got
+        if kind == "mention":
+            counts["mention"] += 1
+            log(f"  {it.key}: a CC {c} mention, not the article's licence (check by hand)")
+            continue
+        st = "open" if c in opens else "cc-other"
+        counts[st] += 1
+        log(f"  {it.key}: CC {c} on the article" + (" -> open" if st == "open" else
+                                                     " (not in [licences] open)"))
+        if apply:
+            it.meta["licence"] = {"source": "text", "checked": dt.date.today().isoformat(),
+                                  "code": c}
+            if st == "open":
+                it.meta["sharing"] = "open"
+            it.save_meta()
+    return counts

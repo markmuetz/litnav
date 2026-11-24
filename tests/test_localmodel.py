@@ -541,3 +541,35 @@ def test_guard_lets_a_pdf_be_opened_in_a_viewer(ilib):
     for cmd in [f"open --stdout /tmp/x -a Preview {pdf}", f"open -a TextEdit {pdf}",
                 f"open -f {pdf}", f"open {pdf}; cat {pdf}", f"open {lib.get('smith2021cold').text_path}"]:
         assert deny(_hook(lib, "Bash", {"command": cmd})), cmd
+
+
+def test_licence_line_from_text():
+    f = licences.from_text
+    assert f("Body. This is an open access article under the terms of the Creative Commons "
+             "Attribution License, which permits use.") == ("by", "article")
+    assert f("This work is distributed under the Creative Commons Attribution-NonCommercial-"
+             "NoDerivs 4.0 License.") == ("by-nc-nd", "article")
+    assert f("This article is licensed under a Creative Commons Attribution 4.0 license "
+             "(http://creativecommons.org/licenses/by/4.0/).") == ("by", "article")
+    assert f("Data availability. The model output is available on Zenodo under a CC BY 4.0 "
+             "licence.") == ("by", "mention")
+    assert f("© 2014 American Meteorological Society. For information regarding reuse, consult "
+             "the AMS Copyright Policy.") is None
+    # an article line wins over an earlier data mention
+    assert f("The data are shared under CC BY 4.0 on Zenodo. " + "x " * 300 + "This is an open "
+             "access article under the terms of the Creative Commons Attribution-NonCommercial "
+             "License.") == ("by-nc", "article")
+
+
+def test_licences_from_text_marks_open_and_prints_no_text(ilib, capsys):
+    lib = strict(ilib)
+    it = lib.get("smith2021cold")
+    it.text_path.write_text(it.text() + "\nThis is an open access article under the terms of "
+                            "the Creative Commons Attribution License.\n")
+    assert cli.main(["-L", str(lib.root), "licences", "--from-text"]) == 0
+    assert lib.get("smith2021cold").sharing == "licensed"                 # dry run
+    err = capsys.readouterr().err
+    assert "smith2021cold: CC by on the article" in err and "open access article" not in err
+    assert cli.main(["-L", str(lib.root), "licences", "--from-text", "--apply"]) == 0
+    it = lib.get("smith2021cold")
+    assert it.sharing == "open" and it.meta["licence"]["source"] == "text"
