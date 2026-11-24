@@ -32,6 +32,29 @@ RECURSIVE = {"rg", "grep", "egrep", "fgrep", "ag", "ack", "find", "fd", "tar", "
              "scp", "du", "pdftotext", "pdfgrep", "xargs"}
 SPLIT = re.compile(r"(\|\||&&|[;|&\n])")
 SAFE_LEAD = {"litnav"}
+# Opening a PDF in the user's viewer shows it to them, not to the agent: allowed,
+# but only bare (no --stdout/--stdin redirection, no other app than a viewer).
+VIEWERS = {"Preview", "Skim", "PDF Expert", "Adobe Acrobat Reader", "Zotero"}
+
+
+def _viewer_only(argv: list[str]) -> bool:
+    lead = os.path.basename(argv[0])
+    if lead == "xdg-open":
+        return len(argv) == 2 and argv[1].lower().endswith(".pdf")
+    if lead != "open":
+        return False
+    args, i = argv[1:], 0
+    files = []
+    while i < len(args):
+        a = args[i]
+        if a == "-a" and i + 1 < len(args) and args[i + 1] in VIEWERS:
+            i += 2
+            continue
+        if a.startswith("-") or not a.lower().endswith(".pdf"):
+            return False
+        files.append(a)
+        i += 1
+    return bool(files)
 
 
 def _real(p: Path) -> Path:
@@ -122,6 +145,8 @@ class Guard:
                 base = base / os.path.expanduser(argv[1])        # later commands run there
                 continue
             if lead in SAFE_LEAD or (lead == "uv" and "litnav" in argv[:4]):
+                continue
+            if _viewer_only(argv) and not piped:
                 continue
             recursive = lead in RECURSIVE and (lead not in ("grep", "egrep", "fgrep", "cp")
                                                or any(re.match(r"^-\w*[rR]", a) for a in argv[1:]))

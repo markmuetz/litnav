@@ -527,3 +527,17 @@ def test_copying_summary_is_asked_again(ilib, monkeypatch, tmp_path):
     (q,) = localmodel.queued(lib)
     assert q["rephrased"] and q["id"].endswith("-r") and "refused" in q["messages"][-1]["content"]
     assert lib.get(it.key).summary() is None
+
+
+def test_guard_lets_a_pdf_be_opened_in_a_viewer(ilib):
+    lib = strict(ilib)
+    lib.pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf = lib.pdf_dir / "smith2021cold.pdf"
+    pdf.write_bytes(b"%PDF")
+    deny = lambda r: r and r["hookSpecificOutput"]["permissionDecision"] == "deny"   # noqa: E731
+    assert _hook(lib, "Bash", {"command": f"open {pdf}"}) is None
+    assert _hook(lib, "Bash", {"command": f"open -a Preview {pdf} && echo opened"}) is None
+    assert _hook(lib, "Bash", {"command": f"xdg-open {pdf}"}) is None
+    for cmd in [f"open --stdout /tmp/x -a Preview {pdf}", f"open -a TextEdit {pdf}",
+                f"open -f {pdf}", f"open {pdf}; cat {pdf}", f"open {lib.get('smith2021cold').text_path}"]:
+        assert deny(_hook(lib, "Bash", {"command": cmd})), cmd
