@@ -31,6 +31,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import threading
 import random
 import re
 from collections import Counter
@@ -569,14 +570,17 @@ def judge(lib, eval_path: Path, run_dir: Path, *, model=None, jobs=4, judge_with
         except Exception as e:                       # noqa: BLE001 - record, go on
             log(f"judge {r['id']}: {type(e).__name__}: {e}")
             return None
+        d = {"id": r["id"], "key": key, "judge_model": real, "judge_prompt_version": JUDGE_VERSION[task],
+             "judgment": out}
+        # saved as each finishes, so a run stopped part-way keeps its judgments
+        # and a rerun judges only the rest
+        with lock, open(jpath, "a", encoding="utf-8") as f:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
         log(f"judged {r['id']}")
-        return {"id": r["id"], "key": key, "judge_model": real, "judge_prompt_version": JUDGE_VERSION[task],
-                "judgment": out}
+        return d
+    lock = threading.Lock()
     with ThreadPoolExecutor(jobs) as ex:
         done = [x for x in ex.map(one, todo) if x]
-    with open(jpath, "a", encoding="utf-8") as f:
-        for d in done:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
     if done:
         info = {"model": done[0]["judge_model"], "prompt_version": JUDGE_VERSION[task]}
         m = json.loads((run_dir / "run.json").read_text())

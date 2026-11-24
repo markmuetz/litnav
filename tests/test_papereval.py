@@ -341,3 +341,26 @@ def test_mentions_copying_is_reasked_and_logged(ilib, tmp_path, monkeypatch):
                                                     {"statement": "Fine.", "chunk": "c"}]}], {})
     keep, q, dropped = C.drop_copied(it, recs, quotes)
     assert dropped == 1 and [r["statement"] for r in keep] == ["Fine."] and len(q) == 1
+
+
+def test_judgments_are_saved_as_each_finishes(ilib, tmp_path, monkeypatch):
+    """A judgment is on disk before the run moves on, so a stopped run keeps it."""
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [
+        {"id": "k1", "point": "p", "kind": "finding", "core": True}]}])
+    FakeModel(monkeypatch, lambda m: {"claims": [
+        {"claim": "Gravity waves radiate from squall lines.", "kind": "finding", "numbers": [], "conditions": "",
+         "strength": "shown", "passages": []}]})
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "extract", tmp_path / "x", log=lambda m: None)
+    on_disk = []
+
+    def log(m):
+        if m.startswith("judged"):
+            on_disk.append(len(P.load(rd / "judgments.jsonl")))
+    assert P.judge(lib, ev, rd, log=log) == 1
+    assert on_disk == [1]
+    assert P.judge(lib, ev, rd, log=log) == 0           # a rerun judges nothing twice
