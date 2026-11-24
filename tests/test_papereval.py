@@ -364,3 +364,94 @@ def test_judgments_are_saved_as_each_finishes(ilib, tmp_path, monkeypatch):
     assert P.judge(lib, ev, rd, log=log) == 1
     assert on_disk == [1]
     assert P.judge(lib, ev, rd, log=log) == 0           # a rerun judges nothing twice
+
+
+def test_mentions_rewrite_only_the_copying_statements_and_check_their_meaning(ilib, tmp_path, monkeypatch):
+    from litnav import claims as C
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [{"id": "k1", "point": "p", "kind": "finding",
+                                                            "core": True}]}])
+    it = lib.get("jones2019gravity")
+    words = it.text().split()
+    lifted = [" ".join(words[i:i + 16]) for i in (0, 40, 80)]
+    nums = [" ".join(C.numbers(t)) for t in lifted]
+    seen = []
+
+    def reply(messages):
+        seen.append(messages)
+        if messages[0]["content"] == C.MEANING_SYSTEM:
+            return {"checks": [{"n": 2, "verdict": "same", "reason": "same claim"},
+                               {"n": 4, "verdict": "different", "reason": "drops the condition"}]}
+        if len(messages) > 2:                                      # the rewrite call
+            return {"rewrites": [{"n": 2, "statement": f"Reworded claim A {nums[0]}."},
+                                 {"n": 3, "statement": "Reworded claim B 999."},          # a number changed
+                                 {"n": 4, "statement": f"Reworded claim C {nums[2]}."}]}
+        ids = [l[1:].split("]")[0] for l in messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
+               if l.startswith("[")]
+        m = {"statement": "Squall lines radiate waves.", "chunk": ids[0], "quote": "", "source": "text",
+             "claim_type": "shown", "evidence": "theory",
+             "experiment": {"model": "", "resolution": "", "method": "", "deep_convection_parametrized": "unknown",
+                            "run_name": ""},
+             "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
+             "hedging": "strong", "hedge_words": "", "value": {"value": "", "units": "", "low": "", "high": ""}}
+        return {"mentions": [m] + [{**m, "statement": t} for t in lifted]}
+    FakeModel(monkeypatch, reply)
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "mentions", tmp_path / "m", chars=100_000, log=lambda m: None)
+    assert len(seen) == 3                                          # extract, rewrite, meaning check
+    note = seen[1][-1]["content"]
+    assert "Rewrite only these statements" in note and seen[1][1] == seen[0][1]   # same passages as context
+    assert "1. A:" not in seen[2][1]["content"] and "2. A:" in seen[2][1]["content"]
+    assert "3. A:" not in seen[2][1]["content"]                    # the changed number never reaches the check
+    assert P.reask_jobs(lib, rd, "mentions") == []
+    out = P.paper_results(rd, "mentions")["mentions-jones2019gravity"]["output"]["mentions"]
+    assert out[0]["statement"] == "Squall lines radiate waves."    # untouched
+    assert out[1]["statement"].startswith("Reworded claim A") and out[1]["rewritten"]
+    assert out[2]["statement"] == lifted[1] and out[3]["statement"] == lifted[2]   # kept: rejected
+    s = P.report(lib, ev, rd)["summary"]
+    assert s["rewrites"] == {"asked": 3, "candidates": 2, "used": 1}
+    assert s["copied_12_first"] == 3 and s["copied_12"] == 2
+
+
+def test_rewrite_number_check():
+    from litnav import claims as C
+    assert C.rewrite_problem("Rain rose 12% over 1,000 km.", "Over 1000 km rainfall went up by 12%.") == ""
+    assert "numbers changed" in C.rewrite_problem("Rain rose 12%.", "Rain rose 21%.")
+    assert C.rewrite_problem("x", "") == "empty" and C.rewrite_problem("same", "same") == "unchanged"
+
+
+def test_a_rewrite_that_still_copies_is_not_checked(ilib, tmp_path, monkeypatch):
+    from litnav import claims as C
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": []}])
+    it = lib.get("jones2019gravity")
+    lifted = " ".join(it.text().split()[:16])
+    seen = []
+
+    def reply(messages):
+        seen.append(messages)
+        if messages[0]["content"] == C.MEANING_SYSTEM:
+            return {"checks": []}
+        if len(messages) > 2:
+            return {"rewrites": [{"n": 1, "statement": "So: " + lifted}]}            # still copies
+        ids = [l[1:].split("]")[0] for l in messages[1]["content"].split("Passages:\n", 1)[1].splitlines()
+               if l.startswith("[")]
+        return {"mentions": [{"statement": lifted, "chunk": ids[0], "quote": "", "source": "text",
+                              "claim_type": "shown", "evidence": "theory",
+                              "experiment": {"model": "", "resolution": "", "method": "",
+                                             "deep_convection_parametrized": "unknown", "run_name": ""},
+                              "conditions": {"region": "", "regime": "", "period": "", "resolution": ""},
+                              "hedging": "strong", "hedge_words": "",
+                              "value": {"value": "", "units": "", "low": "", "high": ""}}]}
+    FakeModel(monkeypatch, reply)
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "mentions", tmp_path / "m", chars=100_000, log=lambda m: None)
+    assert len(seen) == 2                                          # no meaning check: nothing left to check
+    s = P.report(lib, ev, rd)["summary"]
+    assert s["rewrites"]["used"] == 0 and s["copied_12"] == 1

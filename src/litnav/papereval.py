@@ -31,8 +31,8 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-import threading
 import random
+import threading
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -286,9 +286,48 @@ def reask_jobs(lib, run_dir: Path, task: str) -> list[dict]:
             bad = claims.copied(it, o)
             if bad:
                 out.append(claims.rephrase_job(j, o, bad))
+    if task == "mentions":                  # phase 2: check each usable rewrite's meaning
+        rjobs = {r["id"]: r for r in load(run_dir / "reask.jsonl")} if (run_dir / "reask.jsonl").exists() else {}
+        for j in load(run_dir / "jobs.jsonl"):
+            rid = f"{j['id']}-r"
+            again, first = res.get(rid, {}), res.get(j["id"], {})
+            if f"{j['id']}-c" in res or not (again.get("ok") and isinstance(again.get("output"), dict)):
+                continue
+            asked = (rjobs.get(rid) or {}).get("rewrite")
+            if not asked or "rewrites" not in again["output"]:
+                continue                      # an old whole-reply re-ask: nothing to check
+            cand = claims.candidate_rewrites(first.get("output"), again["output"], asked)
+            still = {b["n"] for b in claims.copied(lib.get(j["key"]), {"mentions": [
+                {"statement": cand.get(n, "")} for n in range(1, max(cand, default=0) + 1)]}) if b["n"] in cand}
+            cand = {n: t for n, t in cand.items() if n not in still}      # a rewrite that still copies: not used
+            if cand:
+                out.append(claims.meaning_job(j, first["output"], cand))
     if out:
-        save(run_dir / "reask.jsonl", out)
+        prev = load(run_dir / "reask.jsonl") if (run_dir / "reask.jsonl").exists() else []
+        ids = {o["id"] for o in out}
+        save(run_dir / "reask.jsonl", [r for r in prev if r["id"] not in ids] + out)
     return out
+
+
+def _pending(run_dir: Path, jobs: list[dict]) -> Path:
+    """The jobs of this round alone, for the runner (reask.jsonl keeps them all)."""
+    p = run_dir / "reask-round.jsonl"
+    save(p, jobs)
+    return p
+
+
+def reask_local(lib, run_dir: Path, task: str, url, model, *, log=print, **kw) -> int:
+    """Rewrites, then their meaning checks, on the local endpoint."""
+    n = 0
+    for _ in range(2):
+        rj = reask_jobs(lib, run_dir, task)
+        if not rj:
+            break
+        log(f"asking {len(rj)} call(s) again: "
+            + ("checking rewrites" if all("meaning_check" in j for j in rj) else "they copied from the paper"))
+        batch_runner.run(_pending(run_dir, rj), run_dir / "results.jsonl", url, model, log=log, **kw)
+        n += len(rj)
+    return n
 
 
 def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, chars: int | None = None,
@@ -302,15 +341,13 @@ def run(lib, eval_path: Path, task: str, run_dir: Path | None = None, *, chars: 
     write_run_meta(run_dir, task=task, eval_path=eval_path, model=model, via="local", eval_chars=chars,
                    model_info=localmodel.model_info(lib), profile=lib.local_model.get("profile"))
     batch_runner.run(run_dir / "jobs.jsonl", run_dir / "results.jsonl", url, model, log=log, **kw)
-    rj = reask_jobs(lib, run_dir, task)
-    if rj:
-        log(f"asking {len(rj)} call(s) again: they copied from the paper")
-        batch_runner.run(run_dir / "reask.jsonl", run_dir / "results.jsonl", url, model, log=log, **kw)
+    reask_local(lib, run_dir, task, url, model, log=log, **kw)
     return run_dir
 
 
 def push_reask(lib, run_dir: Path, *, submit=True, log=print) -> dict | None:
-    """After a pulled cluster run: send its re-asks as a batch into the same run folder."""
+    """After a pulled cluster run: send its re-asks as a batch into the same run folder.
+    Mentions take two pushes: the rewrites, then (after pulling them) their meaning checks."""
     from . import spool
     task = json.loads((run_dir / "run.json").read_text())["task"]
     rj = reask_jobs(lib, run_dir, task)
@@ -520,15 +557,30 @@ def paper_results(run_dir: Path, task: str) -> dict:
         for r in load(run_dir / "results.jsonl"):
             if r["id"] not in res or r.get("ok"):          # a later success replaces a failure
                 res[r["id"]] = r
+    rjobs = {r["id"]: r for r in load(run_dir / "reask.jsonl")} if (run_dir / "reask.jsonl").exists() else {}
     out = {}
     for j in jobs:
         first = res.get(j["id"], {})
         again = res.get(f"{j['id']}-r", {})
+        rw = None
+        if (task == "mentions" and again.get("ok") and isinstance(again.get("output"), dict)
+                and "rewrites" in again["output"] and isinstance(first.get("output"), dict)):
+            chk = res.get(f"{j['id']}-c", {})
+            merged, rw = claims.merge_rewrites(first["output"], again["output"],
+                                               (rjobs.get(f"{j['id']}-r") or {}).get("rewrite") or [],
+                                               chk.get("output") if chk.get("ok") else None,
+                                               (rjobs.get(f"{j['id']}-c") or {}).get("meaning_check"))
+            again = {**first, "output": merged,
+                     "seconds": (first.get("seconds") or 0) + (again.get("seconds") or 0)
+                     + (chk.get("seconds") or 0)}
         r = again if again.get("ok") and isinstance(again.get("output"), dict) else first
         pid = f"{task}-{j['key']}" if task == "mentions" else j["id"]
         p = out.setdefault(pid, {"id": pid, "key": j["key"], "ok": True, "seconds": 0.0, "passages": [],
-                                 "chars_sent": 0, "parts": [], "first_parts": [], "reasked": 0})
+                                 "chars_sent": 0, "parts": [], "first_parts": [], "reasked": 0,
+                                 "rewrites": {"asked": 0, "candidates": 0, "used": 0}})
         p["reasked"] += r is again
+        for k, v in (rw or {}).items():
+            p["rewrites"][k] += v
         p["first_parts"].append(first.get("output") if isinstance(first.get("output"), dict) else None)
         good = bool(r.get("ok")) and isinstance(r.get("output"), dict)
         p["ok"] = p["ok"] and good
@@ -615,7 +667,7 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
         text = lib.get(key).text()
         row = {"id": jid, "key": key, "ok": out is not None, "seconds": r.get("seconds"), "judged": jid in jud,
                "paper_chars": len(text), "chars_sent": r["chars_sent"], "calls": len(r["parts"]),
-               "reasked": r.get("reasked", 0)}
+               "reasked": r.get("reasked", 0), "rewrites": r.get("rewrites") or {}}
         if out is not None:
             grams = _ngrams(text)
             if task == "summary":
@@ -783,6 +835,8 @@ def summarize(task, rows) -> dict:
     if task == "mentions":
         n = sum(r.get("claims", 0) for r in rows)
         s["copied_12_first"] = sum(r.get("copied_12_first", 0) for r in rows)
+        s["rewrites"] = {k: sum((r.get("rewrites") or {}).get(k, 0) for r in rows)
+                         for k in ("asked", "candidates", "used")}
         s.update({"claims": n, "claims_per_paper": round(n / max(1, s["outputs"]), 1),
                   "copied_12": sum(r.get("copied_12", 0) for r in rows),
                   "grounded": round(sum(r.get("grounded", 0) for r in rows) / max(1, n), 3),

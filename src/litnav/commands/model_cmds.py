@@ -386,13 +386,11 @@ def cmd_paper_eval(a):
             r = P.push_reask(lib, rd, submit=not a.no_submit, log=log)
             log(f"pushed batch {r['batch']} of re-asks" if r else "nothing to ask again")
         else:
-            from .. import batch_runner, localmodel
+            from .. import localmodel
             task = json.loads((rd / "run.json").read_text())["task"]
-            rj = P.reask_jobs(lib, rd, task)
-            if rj:
-                url, model, kw = localmodel.endpoint(lib)
-                batch_runner.run(rd / "reask.jsonl", rd / "results.jsonl", url, model, log=log, **kw)
-            log(f"asked {len(rj)} call(s) again")
+            url, model, kw = localmodel.endpoint(lib)
+            n = P.reask_local(lib, rd, task, url, model, log=log, **kw)
+            log(f"asked {n} call(s) again")
         return
     if a.action == "agree":
         print(json.dumps(P.agree(lib, ev, rd), indent=1))
