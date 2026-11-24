@@ -56,7 +56,8 @@ def cmd_import(a):
     if a.from_plan:
         rows = importer.read_plan(lib)
         print(f"applying plan: {len(rows)} rows", file=sys.stderr)
-        c = importer.apply(lib, rows, tags=a.tag, mode="move" if a.move else None)
+        c = importer.apply(lib, rows, tags=a.tag, mode="move" if a.move else None,
+                            client=importer.Client.for_library(lib))
         print(c, file=sys.stderr)
         return
     if a.from_downloads is not None:
@@ -105,7 +106,8 @@ def cmd_import(a):
               "--title T --author 'Family, Given' [--author ...] --year Y [--journal J]",
               file=sys.stderr)
     if a.apply:
-        c = importer.apply(lib, rows, tags=a.tag, mode="move" if a.move else None)
+        c = importer.apply(lib, rows, tags=a.tag, mode="move" if a.move else None,
+                            client=importer.Client.for_library(lib))
         print(c, file=sys.stderr)
     else:
         print(f"plan written to {importer.plan_path(lib)}; --apply or --from-plan to import",

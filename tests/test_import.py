@@ -208,3 +208,22 @@ def test_arxiv_id_found_but_api_down_says_so(lib, pdfs, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "arXiv id 2501.01234" in err and "did not answer" in err
     assert "--title T --author" not in err
+
+
+def test_import_fetches_the_abstract_and_reads_the_licence_line(lib, pdfs, monkeypatch):
+    from litnav import abstracts
+    text = TEXT_A + ("\nThis is an open access article under the terms of the Creative Commons "
+                     "Attribution License.\n")
+    pdfs("jas-d-20-0001.pdf", text)
+    rows = importer.plan(lib, importer.inbox_files(lib), client=client(), log=lambda *a: None)
+    inv = {w: [i] for i, w in enumerate(("A public abstract of the paper, long enough to count as "
+                                         "one: cold pools lift air and trigger new convective cells "
+                                         "ahead of the gust front.").split())}
+    c = client()
+    c.routes["api.openalex.org/works?"] = {"results": [
+        {"doi": "https://doi.org/10.1175/jas-d-20-0001.1", "abstract_inverted_index": inv}]}
+    monkeypatch.setattr(extract, "extract_item", lambda it, log=None: it.text_path.write_text(text))
+    importer.apply(lib, rows, client=c, log=lambda *a: None)
+    it = lib.get("smith2021cold")
+    assert abstracts.read(it)["source"] == "openalex"
+    assert it.sharing == "open" and it.meta["licence"]["source"] == "text"

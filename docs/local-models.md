@@ -66,6 +66,9 @@ litnav abstracts --doi 10.x/y    # print any paper's abstract
 litnav abstracts KEY --from-html page.html   # from a page you saved yourself
 ```
 
+New imports get theirs at import time, and a licensed import whose own text
+carries a CC licence line (one Crossref did not record) is marked open.
+
 Publisher sites are never fetched: they refuse automated requests. When no
 API has an abstract, open the page in a browser *without* institutional
 access (a private window, off campus and off the VPN), save it, and pass it

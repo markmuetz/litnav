@@ -244,7 +244,9 @@ def read_plan(lib) -> list[dict]:
     return rows
 
 
-def apply(lib, rows, *, tags=(), mode: str | None = None, log=print) -> dict:
+def apply(lib, rows, *, tags=(), mode: str | None = None, client=None, log=print) -> dict:
+    """Import the planned rows. With a client, each new (non-confidential) paper
+    also gets its public abstract looked up (abstracts.py)."""
     mode = mode or lib.config["import"].get("mode", "copy")
     counts = {"imported": 0, "held": 0, "left": 0}
     lib.pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -286,6 +288,7 @@ def apply(lib, rows, *, tags=(), mode: str | None = None, log=print) -> dict:
                     extract_item(lib.get(r["key"]), log=log)
                 except Exception as e:          # a broken PDF must not stop the import
                     log(f"  {r['key']}: no text ({e}); try `litnav extract {r['key']}`")
+                _after_import(lib, r["key"], client, log)
             counts["imported"] += 1
             log(f"  imported {r['key']}")
         elif r["status"] == "held" and r.get("dup_of"):
@@ -301,6 +304,32 @@ def apply(lib, rows, *, tags=(), mode: str | None = None, log=print) -> dict:
         for r in discovery.prune(lib):
             log(f"to-fetch: {r['doi']} is now in the library; row removed")
     return counts
+
+
+def _after_import(lib, key, client, log):
+    """A new paper's licence line in its own text (Crossref misses some), and
+    its public abstract. Neither may stop the import."""
+    from . import abstracts, licences
+    it = lib.get(key)
+    if it.sharing == "licensed" and it.has_text and "code" not in it.meta.get("licence", {}):
+        got = licences.from_text(it.text())
+        if got and got[1] == "article":
+            it.meta["licence"] = {"source": "text", "checked": dt.date.today().isoformat(),
+                                  "code": got[0]}
+            if got[0] in licences.open_codes(lib):
+                it.meta["sharing"] = "open"
+                log(f"  {key}: {got[0]} licence line in its text, so sharing is open")
+            it.save_meta()
+    if client is None:
+        return
+    try:
+        aid = it.meta.get("ids", {}).get("arxiv", "")
+        if it.doi or aid:
+            ab, src, url, tried = abstracts.lookup_one(client, it.doi, aid)
+            abstracts.write(it, ab, src, url, tried)
+            log(f"  {key}: abstract from {src}" if ab else f"  {key}: no public abstract found")
+    except Exception as e:                       # a lookup must not stop the import
+        log(f"  {key}: abstract lookup failed ({e}); try `litnav abstracts {key}`")
 
 
 def _under(p: Path, d: Path) -> bool:
