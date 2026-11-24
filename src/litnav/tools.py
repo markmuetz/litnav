@@ -301,7 +301,32 @@ class Tools:
         bl = refs.backlinks(self.lib).get(it.key, [])
         return {"key": it.key, "note": p.read_text("utf-8") if p.is_file() else "", "cited_in": bl}
 
+    def search_field(self, query: str, k: int = 15, kind: str | None = None) -> dict:
+        from . import field
+        if not field.store_path(self.lib).is_file():
+            raise ValueError("no field store yet: the user runs `litnav field build` and "
+                             "`litnav field embed`")
+        if self.embedder is None:
+            raise ValueError("semantic search is not available (no embedding model)")
+        rows = field.search(self.lib, self.embedder, query, k=k * 3 if kind else k)
+        out = []
+        for r in rows:
+            if r["held"]:
+                kk = self.lib.resolve(r["held"])
+                if not kk or not self.lib.get(kk).allowed(self.meta_purpose):
+                    continue
+                it = self.lib.get(kk)
+                out.append({"held": it.key, "title": it.title, "year": it.year,
+                            "score": r["score"]})
+            elif not kind or r["kind"] == kind:
+                out.append({"openalex": r["id"], "doi": r["doi"], "title": r["title"],
+                            "year": r["year"], "first_author": r["first_author"],
+                            "kind": r["kind"], "abstract": r["abstract"], "score": r["score"]})
+        return {"results": out[:k],
+                "note": "Field works are not in the library: public metadata and abstracts "
+                        "from OpenAlex only. 'held' rows are library papers (use their key)."}
+
 
 TOOL_NAMES = ("search_literature", "search_notes", "get_chunk", "list_sections", "get_section", "get_paper",
               "related_papers", "list_papers", "reading_due", "get_note", "verify_claim",
-              "ask_local_model")
+              "ask_local_model", "search_field")

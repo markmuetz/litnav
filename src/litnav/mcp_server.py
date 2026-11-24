@@ -26,7 +26,8 @@ such a passage says; check claims with verify_claim, which asks the user's
 local model and reports a verdict, location and confidence. For a question
 that needs reading such papers (what a paper argues, how two papers differ),
 use ask_local_model: the local model reads them and answers in its own words.
-Pass its answer on as the local model's, with its citations."""
+Pass its answer on as the local model's, with its citations. search_field
+looks beyond the library: works around it with public abstracts only."""
 
 DESCRIPTIONS = {
     "search_literature": "Search passages (default) or papers (papers=true). Hybrid keyword + "
@@ -51,6 +52,12 @@ DESCRIPTIONS = {
                     "page) and a short explanation, not the paper's text. A local model can be "
                     "wrong: report the confidence and location so the user can check. If no local "
                     "model is running the check is queued (verdict 'queued').",
+    "search_field": "Semantic search over the field around the library: works the library cites "
+                    "or that cite it, with their public abstracts (OpenAlex), plus the library's "
+                    "own papers marked 'held'. For what exists beyond the library: candidates, "
+                    "gaps, prior art. Field results are abstract-only and not held: say so, and "
+                    "never present an abstract as having read the paper. `kind` filters to "
+                    "research, review, dataset, model or project.",
     "ask_local_model": "Ask the user's local model a question that needs papers whose text you may "
                        "not read (licensed). It searches and reads the library and answers in its "
                        "own words with [@key] citations (optionally only from `keys`). Slower than "

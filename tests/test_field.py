@@ -164,3 +164,18 @@ def test_forward_counts_weighted_citations(lib):
     assert w["id"] == "W50" and w["cites_library"] == 2 and w["fscore"] > 0
     con = field.connect(lib)
     assert {tuple(x) for x in con.execute("SELECT * FROM links")} == {("W50", "W1"), ("W50", "W2")}
+
+
+def test_mcp_search_field_marks_held_and_hides_confidential(lib):
+    from test_search import FakeEmbedder
+    from litnav.tools import Tools
+    _store(lib)
+    e = FakeEmbedder()
+    field.embed(lib, e, log=lambda *x: None)
+    t = Tools(lib, embedder=e)
+    r = t.search_field("cold pools gust fronts", k=5)
+    held = [x for x in r["results"] if "held" in x]
+    assert held and held[0]["held"] == "smith2021cold"
+    assert all("doe2026" not in json.dumps(x) for x in r["results"])
+    assert all(x["kind"] == "research" for x in t.search_field("ozone", k=3, kind="research")["results"]
+               if "kind" in x)
