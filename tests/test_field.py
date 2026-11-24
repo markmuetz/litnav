@@ -82,3 +82,18 @@ def test_kind_of():
     assert k("The Met Office Unified Model Global Atmosphere 7.0/7.1 configurations") == "model"
     assert k("Madden-Julian oscillation", type="review") == "review"
     assert k("Cold pools organize convection") == "research"
+
+
+def test_kind_of_keeps_studies_as_research():
+    k = lambda t: field.kind_of({"title": t})   # noqa: E731
+    assert k("Tropical Intraseasonal Variability in 14 IPCC AR4 Climate Models. Part I") == "research"
+    assert k("MJO and Convectively Coupled Equatorial Waves Simulated by CMIP5 Climate Models") \
+        == "research"
+    assert k("Global Radiative-Convective Equilibrium in the Community Atmosphere Model, "
+             "Version 5") == "research"
+    assert k("Mechanisms of convective cloud organization by cold pools over tropical warm "
+             "ocean during the AMIE/DYNAMO field campaign") == "research"
+    assert k("Can the GPM IMERG Final Product Accurately Represent MCSs") == "research"
+    assert k("EUREC4A: A Field Campaign to Elucidate the Couplings Between Clouds") == "project"
+    assert k("A new dynamical core for the Met Office's global and regional modelling") == "model"
+    assert k("Description of the NCAR Community Atmosphere Model (CAM 3.0)") == "model"

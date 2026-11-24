@@ -52,13 +52,19 @@ _DATASET = re.compile(
     r"global precipitation climatology|best track|observational record)\b", re.I)
 _MODEL = re.compile(
     r"\b(model description|description of (the |a )?[\w\s-]{0,40}(model|scheme|system)|"
-    r"(model|scheme|configuration)s?,? (version|v)\s?\d|global (atmosphere|land|ocean) \d|"
-    r"(the )?[A-Z][\w-]*\d(\.\d)* (model|climate model|earth system model)|"
-    r"overview of the [\w\s-]{0,30}model|formulation and (evaluation|validation)|"
-    r"dynamical core|model configuration)", re.I)
-_PROJECT = re.compile(r"\b(intercomparison project|experimental design|experiment design|"
-                      r"field (campaign|experiment)|overview of (CMIP|the [\w\s-]*project)|"
-                      r"(MIP|campaign)\b.*\b(overview|design|protocol))", re.I)
+    r"global (atmosphere|land|ocean) \d[\w./ ]*configurations?|"
+    r"overview of the [\w\s-]{0,30}model\b|formulation and (evaluation|validation)|"
+    r"new dynamical core|dynamical core for|model configurations?\b)", re.I)
+# a project or campaign overview, not a study that uses one
+_PROJECT = re.compile(
+    r"(\b(overview|design|protocol|plan|description|introduc\w*)\b.*\b(intercomparison|project|"
+    r"campaign|experiment)s?\b|\b(intercomparison project|campaign|experiment)\b.*\b(overview|"
+    r"experimental design|experiment design|protocol)\b|^[\w-]+( \d+)?: an? (field )?"
+    r"(campaign|experiment)\b)", re.I)
+# evaluations of a dataset or model are research, not the dataset or model
+_STUDY = re.compile(r"^(can|does|do|how|is|are|what|why|evaluat\w*|assess\w*|compar\w*|"
+                    r"validat\w*|an? (evaluation|assessment|comparison|validation))\b|"
+                    r"\b(simulated|represented|in \d+ [\w ]*models|by [\w ]*models)\b", re.I)
 _REVIEW = re.compile(r"^(a )?review\b|\breview of\b|\bstate of the (art|science)\b", re.I)
 DATA_VENUES = ("zenodo", "pangaea", "data repository", "earth system science data",
                "scientific data")
@@ -80,11 +86,14 @@ def connect(lib) -> sqlite3.Connection:
 def kind_of(w: dict) -> str:
     title = w.get("title") or ""
     venue = (((w.get("primary_location") or {}).get("source") or {}).get("display_name") or "").lower()
-    if w.get("type") == "dataset" or any(v in venue for v in DATA_VENUES) or _DATASET.search(title):
+    study = bool(_STUDY.search(title))
+    if w.get("type") == "dataset" or any(v in venue for v in DATA_VENUES) or \
+            (_DATASET.search(title) and not study):
         return "dataset"
     if _PROJECT.search(title):
         return "project"
-    if _MODEL.search(title) or ("geoscientific model development" in venue and "model" in title.lower()):
+    if not study and (_MODEL.search(title) or (
+            "geoscientific model development" in venue and "description" in title.lower())):
         return "model"
     if w.get("type") == "review" or _REVIEW.search(title) or "reviews of geophysics" in venue:
         return "review"
