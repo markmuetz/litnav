@@ -26,6 +26,31 @@ def add(sub):
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_explore)
 
+    p = sub.add_parser("field", help="the field around the library: works with their public "
+                       "abstracts, kinds and topics (<index>/field/; decisions in discovery/field.tsv)")
+    s = p.add_subparsers(dest="fa", metavar="<action>")
+    q = s.add_parser("build", help="fetch the backward set: works cited by several library papers")
+    q.add_argument("--min-cites", type=int, default=3)
+    q.set_defaults(func=cmd_field_build)
+    q = s.add_parser("list", help="top field works by score (default: research papers)")
+    q.add_argument("--kind", default="research",
+                   help="research, review, dataset, model, project, or all")
+    q.add_argument("--limit", "-k", type=int, default=30)
+    q.add_argument("--decided", action="store_true", help="include ones you decided on")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_field_list)
+    q = s.add_parser("topics", help="OpenAlex topics: works in the field vs papers in the library")
+    q.add_argument("--limit", "-k", type=int, default=40)
+    q.set_defaults(func=cmd_field_topics)
+    for name, hlp in (("want", "mark wanted, and add to the to-fetch list"),
+                      ("skip", "mark not wanted (not proposed again)"),
+                      ("note", "attach a note")):
+        q = s.add_parser(name, help=hlp)
+        q.add_argument("ids", nargs="+", help="OpenAlex ids (W...) or DOIs")
+        q.add_argument("--note", default="")
+        q.set_defaults(func=cmd_field_decide, status=name)
+    p.set_defaults(func=cmd_field_list, kind="research", limit=30, decided=False, json=False)
+
     p = sub.add_parser("to-fetch", help="the list of papers to get: list, add, skip, open, prune")
     s = p.add_subparsers(dest="tf", metavar="<action>")
     q = s.add_parser("list", help="show the list (default)")
@@ -130,3 +155,52 @@ def cmd_tf_prune(a):
     lib = Library.find(a.library)
     gone = D.prune(lib)
     print(f"dropped {len(gone)} row(s) now in the library")
+
+
+def cmd_field_build(a):
+    import sys
+
+    from .. import field
+    from ..net import Client
+    lib = Library.find(a.library)
+    r = field.build_backward(lib, Client.for_library(lib), min_cites=a.min_cites,
+                             log=lambda m: print(m, file=sys.stderr))
+    print(json.dumps(r))
+
+
+def cmd_field_list(a):
+    from .. import field
+    lib = Library.find(a.library)
+    rows = field.listing(lib, kind=None if a.kind == "all" else a.kind, n=a.limit,
+                         show_decided=a.decided)
+    if a.json:
+        print(json.dumps(rows, indent=1))
+        return
+    for r in rows:
+        held = f"  [maybe held: {r['maybe_held']}]" if r["maybe_held"] else ""
+        ab = "" if r["abstract"] else "  (no abstract)"
+        print(f"{r['score']:6.2f}  {r['library_citers']:3d} lib  {r['cited_by_count'] or 0:6d} cites  "
+              f"{r['id']}  {r['year']} {r['first_author'][:22]}: {r['title'][:80]}{held}{ab}")
+
+
+def cmd_field_topics(a):
+    from .. import field
+    lib = Library.find(a.library)
+    print(f"{'field':>6} {'lib':>5}  topic (subfield)")
+    for r in field.topics(lib)[:a.limit]:
+        print(f"{r['field_works']:6d} {r['library']:5d}  {r['topic']} ({r['subfield']})")
+
+
+def cmd_field_decide(a):
+    from .. import field
+    lib = Library.find(a.library)
+    n = field.decide(lib, a.ids, a.status, a.note)
+    if a.status == "want":
+        con = field.connect(lib)
+        rows = [dict(r) for r in con.execute(
+            f"SELECT doi, title, first_author, year FROM works WHERE id IN "
+            f"({','.join('?' * len(a.ids))}) OR doi IN ({','.join('?' * len(a.ids))})",
+            [i.rsplit('/', 1)[-1] for i in a.ids] + [D.norm_doi(i) for i in a.ids])]
+        con.close()
+        D.add(lib, [{**r, "source": "field"} for r in rows if r["doi"]])
+    print(f"{n} marked {a.status}")
