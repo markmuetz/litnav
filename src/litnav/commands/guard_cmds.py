@@ -19,6 +19,17 @@ def add(sub):
     p.add_argument("--recheck", action="store_true", help="look up papers already checked")
     p.set_defaults(func=cmd_licences)
 
+    p = sub.add_parser("abstracts", help="fetch public abstracts (OpenAlex, Semantic Scholar, "
+                       "Crossref, arXiv; Springer/Elsevier with an API key) into "
+                       "papers/<key>/abstract.json; or take one from a page you saved")
+    p.add_argument("keys", nargs="*", help="only these papers (default: all without abstract.json)")
+    p.add_argument("--recheck", action="store_true", help="look up papers already done")
+    p.add_argument("--dry-run", "-n", action="store_true", help="look up, but write nothing")
+    p.add_argument("--doi", help="print the abstract of any DOI (a paper not in the library)")
+    p.add_argument("--from-html", metavar="FILE", help="take the abstract from a page saved from "
+                   "a browser (one key, or none to just print it); only the abstract is read")
+    p.set_defaults(func=cmd_abstracts)
+
     p = sub.add_parser("git-setup", help="keep papers' text out of git: write litnav's .gitignore "
                        "block (from track_text), install the pre-commit check, and list tracked files "
                        "that shouldn't be")
@@ -101,3 +112,54 @@ def cmd_git_check(a):
         print("Unstage them (git restore --staged PATH). If one should be allowed (an open paper), "
               "check its sharing level.", file=sys.stderr)
         return 1
+
+
+def cmd_abstracts(a):
+    from pathlib import Path
+
+    from .. import abstracts as A
+    from .. import index
+    from .. import sharing as S
+    from ..net import Client
+    lib = Library.find(a.library)
+    if a.from_html:
+        if len(a.keys) > 1:
+            raise ValueError("--from-html takes one key")
+        it = None
+        if a.keys:
+            k = lib.resolve(a.keys[0])
+            if not k:
+                raise ValueError(f"no paper {a.keys[0]!r}")
+            it = lib.get(k)
+            if not it.allowed(S.LOOKUP):
+                raise ValueError(f"{it.key} is {it.sharing}: nothing about it is handled")
+        text = Path(a.from_html).expanduser().read_text("utf-8", "replace")
+        ab, where = A.from_html(text, it.title if it else "")
+        if not ab:
+            print(f"no abstract taken: {where}", file=sys.stderr)
+            return 1
+        if it:
+            A.write(it, ab, "saved-page", where)
+            index.update(lib, log=lambda *x: None)
+            print(f"{it.key}: abstract from the saved page ({where}, {len(ab)} chars)",
+                  file=sys.stderr)
+        print(ab)
+        return 0
+    c = Client.for_library(lib)
+    if a.doi:
+        ab, src, url, tried = A.lookup_one(c, a.doi)
+        if not ab:
+            print(f"no abstract found (tried {', '.join(tried)})", file=sys.stderr)
+            return 1
+        print(f"[{src}] {ab}")
+        return 0
+    keys_ = {lib.resolve(k) or k for k in a.keys} or None
+    n = A.run(lib, c, keys_=keys_, recheck=a.recheck, dry_run=a.dry_run,
+              log=lambda m: print(m, file=sys.stderr))
+    print("  " + "  ".join(f"{k}={v}" for k, v in n.items()), file=sys.stderr)
+    if a.dry_run:
+        print("dry run: nothing written", file=sys.stderr)
+    elif n["found"]:
+        index.update(lib, log=lambda *x: None)
+        print("index updated", file=sys.stderr)
+    return 0

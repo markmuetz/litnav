@@ -42,7 +42,8 @@ def lookup(client, aid: str) -> dict | None:
     if not (title and names and pub):
         return None
     doi = grab("arxiv:doi")
-    return {"id": aid, "title": title, "authors": names, "year": int(pub[:4]), "doi": doi}
+    return {"id": aid, "title": title, "authors": names, "year": int(pub[:4]), "doi": doi,
+            "abstract": grab("summary")}
 
 
 def to_bibtex(rec: dict, key: str) -> str:

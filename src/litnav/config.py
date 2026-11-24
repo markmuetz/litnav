@@ -42,6 +42,11 @@ DEFAULTS: dict = {
         # go to a model (Ask, MCP)? Notes on a paper follow the paper's level.
         "to_models": False,
     },
+    "abstracts": {
+        # May abstracts from public sources (OpenAlex, Crossref, a page saved
+        # without institutional access) go to a model, as summaries may?
+        "to_models": True,
+    },
     "ask": {
         "backend": "claude-code",      # "claude-code" or "api"
         "model": "claude-opus-5-5",

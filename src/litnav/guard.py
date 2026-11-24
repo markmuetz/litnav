@@ -27,7 +27,7 @@ from pathlib import Path
 from . import sharing as S
 
 # files in papers/<key>/ that are metadata or model-written, not the paper's words
-OPEN_FILES = {"ref.bib", "meta.toml", "summary.json"}
+OPEN_FILES = {"ref.bib", "meta.toml", "summary.json", "abstract.json"}
 RECURSIVE = {"rg", "grep", "egrep", "fgrep", "ag", "ack", "find", "fd", "tar", "zip", "rsync", "cp",
              "scp", "du", "pdftotext", "pdfgrep", "xargs"}
 SPLIT = re.compile(r"(\|\||&&|[;|&\n])")

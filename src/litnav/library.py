@@ -157,6 +157,13 @@ class Item:
              "tags": self.tags, "sharing": self.sharing, "has_pdf": self.has_pdf,
              "has_text": self.has_text,
              "relations": self.meta.get("relations", {})}
+        from . import abstracts as A
+        pa = A.read(self)
+        # a public abstract is metadata: it may go where a summary may
+        if pa and pa.get("abstract") and A.to_models(self.lib) and \
+                (self.allowed(purpose) or self.allowed(S.SEND_DERIVED)):
+            d["public_abstract"] = pa["abstract"]
+            d["abstract_source"] = pa.get("source", "")
         s = self.summary()
         # a summary is model-written: where the text may not go, it still may
         sp = S.SEND_DERIVED if purpose in (S.SEND_OUT, S.SEND_OUT_STRICT) else purpose

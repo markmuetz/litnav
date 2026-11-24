@@ -131,7 +131,7 @@ def writer(lib):
 
 def signature(it) -> str:
     parts = [f"c{C.VERSION}s{S.VERSION}"]
-    for p in (it.bib_path, it.meta_path, it.text_path, it.summary_path):
+    for p in (it.bib_path, it.meta_path, it.text_path, it.summary_path, it.dir / "abstract.json"):
         try:
             st = p.stat()
             parts.append(f"{st.st_size}:{int(st.st_mtime_ns)}")
@@ -140,6 +140,11 @@ def signature(it) -> str:
     parts.append("pdf" if it.has_pdf else "nopdf")
     parts.append(it.sharing)             # catches a changed default_sharing too
     return "|".join(parts)
+
+
+def _public_abstract(it) -> str:
+    from . import abstracts
+    return abstracts.public(it)
 
 
 def _abstract(parsed: S.Parsed) -> str:
@@ -175,7 +180,8 @@ def index_item(con, it) -> int:
         key, it.title, "; ".join(authors), first, year, it.journal, it.doi,
         ",".join(it.tags), it.sharing, int(it.has_pdf), int(it.has_text),
         summ.get("summary", ""), summ.get("topic", ""),
-        _abstract(parsed) if parsed else "", int(bool(parsed and parsed.detected)), len(cs),
+        (_abstract(parsed) if parsed else "") or _public_abstract(it),
+        int(bool(parsed and parsed.detected)), len(cs),
         signature(it)))
     con.execute("INSERT INTO items_fts VALUES (?,?,?,?,?)", (
         key, it.title, "; ".join(authors), " ".join(it.tags),
