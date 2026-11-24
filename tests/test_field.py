@@ -144,7 +144,7 @@ def test_forward_counts_weighted_citations(lib):
             con.execute("INSERT INTO library VALUES (?,?,'','','')", (i, k))
     con.close()
     def page(ids):
-        return {"meta": {"next_cursor": None}, "results": [{"id": f"https://openalex.org/{i}"} for i in ids]}
+        return {"meta": {}, "results": [{"id": f"https://openalex.org/{i}"} for i in ids]}
     topic = {"display_name": "T", "subfield": {"display_name": "S"}, "field": {"display_name": "F"}}
     c = FakeClient({
         "openalex:W1|W2|W3": {"results": [
@@ -190,11 +190,11 @@ def test_forward_stops_on_a_network_failure_and_writes_nothing(lib, capsys):
     c = FakeClient({
         "openalex:W1|W2": {"results": [{"id": "https://openalex.org/W1", "cited_by_count": 10},
                                        {"id": "https://openalex.org/W2", "cited_by_count": 10}]},
-        "cites:W1,": {"meta": {"next_cursor": None}, "results": [{"id": "https://openalex.org/W50"}]},
+        "cites:W1,": {"meta": {}, "results": [{"id": "https://openalex.org/W50"}]},
         # no route for cites:W2: the fake raises NetError, as an offline client does
     })
     import pytest
-    with pytest.raises(field.Interrupted, match="seed 2 of 2"):
+    with pytest.raises(field.Interrupted, match="seed 2 of 2.*page 1"):
         field.build_forward(lib, c, min_lib=1, log=lambda *x: None)
     assert field.connect(lib).execute("SELECT count(*) FROM works").fetchone()[0] == 0
     import litnav.net as N
@@ -204,3 +204,22 @@ def test_forward_stops_on_a_network_failure_and_writes_nothing(lib, capsys):
             return monkey["get_json"]()
     with pytest.raises(field.Interrupted, match="batch 1 of 1"):
         field.fetch(Down(), ["W1"])
+
+
+
+def test_forward_pages_by_number_so_reruns_hit_the_cache(lib):
+    con = field.connect(lib)
+    with con:
+        con.execute("INSERT INTO library VALUES ('W1','a2020x','','','')")
+    con.close()
+    full = {"meta": {}, "results": [{"id": f"https://openalex.org/W{1000 + i}"} for i in range(200)]}
+    c = FakeClient({
+        "openalex:W1\"": {"results": [{"id": "https://openalex.org/W1", "cited_by_count": 250}]},
+        '"page": 1,': full,
+        '"page": 2,': {"meta": {}, "results": [{"id": "https://openalex.org/W9"}]},
+        "openalex:W": {"results": []},
+    })
+    r = field.build_forward(lib, c, min_lib=1, log=lambda *x: None)
+    assert r["citing_works"] == 201
+    pages = [u for u in c.calls if "cites:W1" in u]
+    assert len(pages) == 2 and all("cursor" not in u for u in pages)

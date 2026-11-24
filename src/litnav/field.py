@@ -120,8 +120,8 @@ class Interrupted(RuntimeError):
 
 
 def _stop(e, where: str):
-    raise Interrupted(f"{where}: {e}. Nothing was written; rerun when the network is back "
-                      "(pages fetched so far are cached, so it resumes quickly)") from None
+    raise Interrupted(f"{where}: {e}. Nothing was written. If the network or OpenAlex is down, "
+                      "rerun later: pages fetched so far are cached, so it resumes quickly") from None
 
 
 def fetch(client, ids: list[str], select: str = SELECT) -> list[dict]:
@@ -217,6 +217,9 @@ def build_backward(lib, client, *, min_cites: int = 3, log=print) -> dict:
             "with_abstract": sum(r[1] or 0 for r in n)}
 
 
+PAGE_LIMIT = 10000            # OpenAlex serves at most this many results by page number
+
+
 def weight(cited_by_count: int | None) -> float:
     """What citing one library paper is worth: less for papers everyone cites."""
     return 1 / math.log10(10 + (cited_by_count or 0))
@@ -228,6 +231,7 @@ def build_forward(lib, client, *, since: int = 2000, min_lib: int = 5, max_seed_
     the weights of the library papers they cite. Seeds cited more than
     `max_seed_cites` times are left out: everyone cites them, so they say
     little, and they would cost most of the requests."""
+    max_seed_cites = min(max_seed_cites, PAGE_LIMIT)
     con = connect(lib)
     lib_ids = dict(con.execute("SELECT id, key FROM library WHERE key<>''").fetchall())
     if not lib_ids:
@@ -238,19 +242,24 @@ def build_forward(lib, client, *, since: int = 2000, min_lib: int = 5, max_seed_
     log(f"forward: {len(seeds)} seeds (of {len(lib_ids)}); citing works since {since}")
     wsum, count = Counter(), Counter()
     for n, sid in enumerate(seeds, 1):
-        cursor, w = "*", weight(cc[sid])
-        while cursor:
+        w = weight(cc[sid])
+        # numbered pages, not cursors: cursors expire, so a cached page's cursor
+        # is dead on a rerun; page URLs never change, so reruns resume from the
+        # cache. Seeds are capped well under OpenAlex's 10,000-result page limit.
+        for page in range(1, PAGE_LIMIT // 200 + 1):
             try:
                 d = client.get_json(openalex.API, purpose=LOOKUP, params={
                     "filter": f"cites:{sid},from_publication_date:{since}-01-01",
-                    "per-page": 200, "select": "id", "cursor": cursor})
+                    "per-page": 200, "select": "id", "page": page})
             except NetError as e:
-                _stop(e, f"seed {n} of {len(seeds)} ({sid})")
-            for r in d.get("results", []):
+                _stop(e, f"seed {n} of {len(seeds)} ({sid}), page {page}")
+            res = d.get("results", [])
+            for r in res:
                 cid = _short(r["id"])
                 wsum[cid] += w
                 count[cid] += 1
-            cursor = (d.get("meta") or {}).get("next_cursor") if d.get("results") else None
+            if len(res) < 200:
+                break
         if n % 50 == 0:
             log(f"  {n}/{len(seeds)} seeds; {len(count)} citing works so far")
     h = D.Holdings(lib)
