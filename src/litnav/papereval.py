@@ -131,10 +131,16 @@ def _gemini(lib, it, system, prompt, schema, model, timeout=1200):
            "--model", model, "--sandbox", "--disable-slash-commands"]
     with tempfile.TemporaryDirectory(prefix="litnav-agy-") as td:
         p = subprocess.run(cmd, capture_output=True, text=True, cwd=td, timeout=timeout, stdin=subprocess.DEVNULL)
-    env = json.loads(p.stdout)
+    try:
+        env = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        env = {"status": "ERROR", "error": (p.stderr or p.stdout or "no output").strip()[:300]}
     out = env.get("structured_output")
     if not isinstance(out, dict):
-        raise RuntimeError(f"agy: no structured output (status {env.get('status')})")
+        msg = str(env.get("error") or p.stderr or "")[:300]
+        if derived._FATAL.search(msg) or "RESOURCE_EXHAUSTED" in (p.stderr or ""):
+            raise derived.Stop(f"agy: {msg}")        # a quota or login error repeats for every paper
+        raise RuntimeError(f"agy: no structured output (status {env.get('status')}){': ' + msg if msg else ''}")
     return out, model
 
 
@@ -611,7 +617,11 @@ def judge(lib, eval_path: Path, run_dir: Path, *, model=None, jobs=4, judge_with
     have = {r["id"] for r in load(jpath)} if jpath.exists() else set()
     todo = [r for r in paper_results(run_dir, task).values() if r["ok"] and r["id"] not in have]
 
+    stop = threading.Event()
+
     def one(r):
+        if stop.is_set():                            # a quota or login error: skip the rest
+            return None
         key = r["key"]
         it = lib.get(key)
         text = it.text()[:JUDGE_CHARS]
@@ -619,6 +629,9 @@ def judge(lib, eval_path: Path, run_dir: Path, *, model=None, jobs=4, judge_with
             out, real = call(lib, it, JUDGE_SYSTEM, judge_prompt(task, it, text, cases[key]["key_points"],
                                                                      r["output"]),
                                 JUDGE_SCHEMA[task], model)
+        except derived.Stop:
+            stop.set()
+            raise
         except Exception as e:                       # noqa: BLE001 - record, go on
             log(f"judge {r['id']}: {type(e).__name__}: {e}")
             return None
@@ -869,7 +882,12 @@ def summarize(task, rows) -> dict:
 # ---- the registry of runs (eval/runs.jsonl, tracked): every task, model and judge
 
 def record(lib, run_dir: Path, scores: dict, *, registry: Path | None = None, judge_with: str = "claude") -> Path:
-    """One row a run and judge (a run judged by Claude and by Gemini has two)."""
+    """One row a run and judge (a run judged by Claude and by Gemini has two).
+    A run not fully judged is not recorded: its scores would stand for a run
+    they cover only part of."""
+    if scores.get("judged") is not None and scores.get("judged", 0) < scores.get("outputs", 0):
+        raise ValueError(f"{run_dir.name}: only {scores.get('judged')} of {scores.get('outputs')} outputs judged "
+                         f"({judge_with}); judge the rest first, then report")
     reg = registry or lib.root / "eval" / "runs.jsonl"
     meta = json.loads((run_dir / "run.json").read_text())
     if judge_with != "claude":

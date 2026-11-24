@@ -378,7 +378,12 @@ def cmd_paper_eval(a):
         print(json.dumps(out, indent=1))
         return
     if a.action == "judge":
-        n = P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, judge_with=a.judge, log=log)
+        from ..derived import Stop
+        try:
+            n = P.judge(lib, ev, rd, model=a.judge_model, jobs=a.jobs, judge_with=a.judge, log=log)
+        except Stop as e:
+            log(f"stopped: {e}. Judgments made so far are saved; rerun later to judge the rest")
+            return 1
         log(f"judged {n} output(s) in {rd} ({a.judge})")
         return
     if a.action == "reask":
@@ -399,7 +404,11 @@ def cmd_paper_eval(a):
     name = "report.json" if a.judge == "claude" else f"report-{a.judge}.json"
     (rd / name).write_text(json.dumps(rep, ensure_ascii=False, indent=1))
     print(json.dumps(rep["summary"], indent=1))
-    P.record(lib, rd, rep["summary"], judge_with=a.judge)
+    try:
+        P.record(lib, rd, rep["summary"], judge_with=a.judge)
+    except ValueError as e:
+        log(f"not recorded: {e}")
+        return 1
     log(f"recorded in {lib.root / 'eval' / 'runs.jsonl'}")
 
 

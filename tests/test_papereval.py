@@ -455,3 +455,36 @@ def test_a_rewrite_that_still_copies_is_not_checked(ilib, tmp_path, monkeypatch)
     assert len(seen) == 2                                          # no meaning check: nothing left to check
     s = P.report(lib, ev, rd)["summary"]
     assert s["rewrites"]["used"] == 0 and s["copied_12"] == 1
+
+
+def test_gemini_quota_stops_the_judge_and_a_partial_run_is_not_recorded(ilib, tmp_path, monkeypatch):
+    import subprocess
+    import pytest
+    from litnav import derived
+    lib = strict(ilib)
+    ev = lib.root / "eval" / "pe.jsonl"
+    ev.parent.mkdir(exist_ok=True)
+    P.save(ev, [{"key": "jones2019gravity", "key_points": [{"id": "k1", "point": "p", "kind": "finding",
+                                                            "core": True}]}])
+    FakeModel(monkeypatch, lambda m: {"claims": [
+        {"claim": "Gravity waves radiate from squall lines.", "kind": "finding", "numbers": [], "conditions": "",
+         "strength": "shown", "passages": []}]})
+    monkeypatch.setattr("litnav.localmodel.model_info", lambda lib: {"model": "fake"})
+    fake_claude(monkeypatch, [])
+    rd = P.run(lib, ev, "extract", tmp_path / "x", log=lambda m: None)
+    calls = []
+
+    def quota(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(
+            {"status": "ERROR", "error": "Individual quota reached. Resets in 3h."}), "AGY_ERROR: RESOURCE_EXHAUSTED")
+    monkeypatch.setattr("shutil.which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(subprocess, "run", quota)
+    with pytest.raises(derived.Stop, match="quota"):
+        P.judge(lib, ev, rd, judge_with="gemini", log=lambda m: None)
+    assert len(calls) == 1
+    s = P.report(lib, ev, rd, "gemini")["summary"]
+    assert s["judged"] == 0 and s["outputs"] == 1
+    with pytest.raises(ValueError, match="only 0 of 1"):
+        P.record(lib, rd, s, registry=tmp_path / "runs.jsonl", judge_with="gemini")
+    assert not (tmp_path / "runs.jsonl").exists()
