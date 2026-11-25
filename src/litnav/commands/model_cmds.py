@@ -97,7 +97,8 @@ def add(sub):
 
     p = sub.add_parser("template", help="topic passes: route (from a topics run), inventory (jobs; then "
                        "claude-run), tally, draft, review, revise (T0); t1 (jobs; then claude-run RUN/t1), t1-summary")
-    p.add_argument("action", choices=["route", "inventory", "tally", "draft", "review", "revise", "t1", "t1-summary"])
+    p.add_argument("action", choices=["route", "inventory", "tally", "draft", "review", "revise", "t1", "t1-summary",
+                                        "t1-judge"])
     p.add_argument("--topics-run", help="route: the topics run folder")
     p.add_argument("--topic", help="route: the topic's name (or a unique part of it)")
     p.add_argument("--run-dir")
@@ -616,6 +617,9 @@ def cmd_template(a):
     elif a.action == "t1":
         out = T.t1_jobs(lib, rd)
         print(f"T1 jobs in {out}; next: litnav claude-run {out}")
+    elif a.action == "t1-judge":
+        s = T.judge_t1(lib, rd, n=a.n if a.n != 40 else 5)
+        print(f"{len(s['papers'])} papers, {s['values']} values: {s['verdicts']}; missed {s['missed']}")
     else:
         print(json.dumps(T.t1_summary(rd), indent=1))
     return 0

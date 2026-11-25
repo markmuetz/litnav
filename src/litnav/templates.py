@@ -318,3 +318,58 @@ def t1_summary(rd: Path) -> dict:
                             sorted(tpl, key=lambda f: -len(filled.get(f["name"], ())))}}
     (rd / "t1" / "summary.json").write_text(json.dumps(s, indent=1))
     return s
+
+
+# ---- judging T1 fills
+
+JUDGE_SYSTEM = """You check values that another model extracted from one scientific paper into a topic template. For
+each value (numbered), read the paper and give a verdict: correct (the paper states this value for this
+field and experiment), partly (right but incomplete, or missing a unit or qualifier that changes its meaning),
+wrong (the paper states something different), not_in_paper (the paper does not state it; it was inferred or
+invented), wrong_field (a true statement put in the wrong field or experiment). Give a short reason for any
+verdict other than correct. Then list missed: fields of the template the paper does state (for an experiment
+it describes) that were not filled, with the value the paper gives. Reply with JSON only."""
+
+JUDGE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdicts", "missed"], "properties": {
+    "verdicts": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                 "required": ["n", "verdict", "reason"],
+                 "properties": {"n": {"type": "integer"},
+                                "verdict": {"type": "string", "enum": ["correct", "partly", "wrong", "not_in_paper",
+                                                                       "wrong_field"]},
+                                "reason": {"type": "string"}}}},
+    "missed": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+               "required": ["field", "experiment", "value"],
+               "properties": {"field": {"type": "string"}, "experiment": {"type": "string"},
+                              "value": {"type": "string"}}}}}}
+
+
+def judge_t1(lib, rd: Path, *, n: int = 5, seed: int = 7, model: str | None = None) -> dict:
+    """A strong model grades the T1 values of n randomly chosen papers that report the topic (open papers
+    only: the judge reads the paper). Writes t1/judge.json."""
+    from .g0 import OPUS, _claude
+    model = model or OPUS
+    res = {json.loads(l)["id"]: json.loads(l) for l in (rd / "t1" / "results.jsonl").read_text().splitlines() if l.strip()}
+    cand = sorted(k for k, r in res.items() if r.get("ok") and r["output"].get("reports_topic"))
+    pick = sorted(random.Random(seed).sample(cand, min(n, len(cand))))
+    tpl = json.loads(_drafts(rd)[-1].read_text())["template"]
+    fields = "\n".join(f"- {f['name']} ({f['applies_to']}): {f['definition']}" for f in tpl["fields"])
+    out = {}
+    for jid in pick:
+        it = lib.get(jid.removeprefix("t1-"))
+        if not it.allowed(S.SEND_OUT):
+            raise PermissionError(f"{it.key} is not open: the judge would read its text")
+        body, _ = _paper(lib, it, ids=True)
+        vals = res[jid]["output"]["values"]
+        lines = "\n".join(f"{i}. [{v['experiment'] or 'paper'}] {v['field']} = {v['value']}" for i, v in enumerate(vals, 1))
+        prompt = (f"Template fields:\n{fields}\n\nExperiments found: {res[jid]['output']['experiments']}\n\n"
+                  f"Values to check:\n{lines}\n\nPaper: {it.title} ({it.year})\n\n{body}")
+        o = _claude(model, JUDGE_SYSTEM, prompt, JUDGE_SCHEMA)
+        out[it.key] = {"values": vals, **o}
+    tally: dict[str, int] = {}
+    for o in out.values():
+        for v in o["verdicts"]:
+            tally[v["verdict"]] = tally.get(v["verdict"], 0) + 1
+    s = {"model": model, "papers": list(out), "verdicts": tally, "values": sum(len(o["values"]) for o in out.values()),
+         "missed": sum(len(o["missed"]) for o in out.values()), "detail": out}
+    (rd / "t1" / "judge.json").write_text(json.dumps(s, ensure_ascii=False, indent=1))
+    return s
