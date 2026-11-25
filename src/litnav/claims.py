@@ -24,8 +24,8 @@ import json
 import re
 import secrets
 
-PROMPT_VERSION = 4              # v4: a runs table per paper (configuration and schemes), mentions name their run
-SCHEMA_VERSION = "0.4"
+PROMPT_VERSION = 5              # v4: an experiments table per paper; v5: a sharper "shown", shown model claims
+SCHEMA_VERSION = "0.4"          # name their entry, "standard physics" marks schemes used
 EVIDENCE_RULE = 2               # evidence_type() below; rule 1 Mark 23 Nov 2026, rule 2 Mark 25 Nov 2026
 LES_MAX_M = 500                 # grid spacing at or below this, with no deep-convection scheme: les
 PARAM_MIN_M = 10_000            # rule 2: coarser than this, scheme not stated -> parametrized (inferred)
@@ -75,13 +75,21 @@ SYSTEM = (
     "to other work, usually with a citation, or states it as known background); assumed (a premise or "
     "method choice the paper takes as given); speculation (offered as a possibility or explanation "
     "without support in this paper). A claim the paper attributes to cited work is restated; the "
-    "paper's own result compared with cited work is shown.\n"
+    "paper's own result compared with cited work is shown. shown is only for what this paper's own data, "
+    "analysis or runs demonstrate, i.e. its results. Never shown: descriptions of a dataset, product, "
+    "instrument, model, software or method (how CMORPH estimates rain, what a scheme does: assumed if "
+    "the paper uses it, restated if it cites it); standard physics or textbook facts (restated); other "
+    "studies' experiments and results, even when described at length (restated); the paper's own "
+    "set-up and choices (assumed). Ask: would this sentence still be true if the paper's results had "
+    "come out differently? If so, it is not shown.\n"
     "- evidence: what the claim rests on (for a restated claim, the cited work's): observations, "
     "reanalysis, model (any numerical simulation), theory, mixed, or unknown if the passages don't say: "
     "don't guess.\n"
     "- experiment_name: if the claim rests on a model run or observational analysis of this paper, its name "
     "from the experiments table given above the passages, exactly as written there; '' otherwise (for "
-    "restated claims, and for experiments not in the table).\n"
+    "restated claims, and for experiments not in the table). A shown claim whose evidence is model or "
+    "observations always names its entry: if several entries support it, name the main one; if the "
+    "passages don't say which, name the entry they most likely use (the paper's main run).\n"
     "- experiment, only for a model run not in the experiments table ('' or unknown otherwise, or if not stated): the model; "
     "resolution: the horizontal grid spacing as written (e.g. '2.2 km', '250 m', '0.25 degrees'); "
     "method; deep_convection_parametrized: yes if the run uses a deep-convection (cumulus) scheme, no "
@@ -156,7 +164,14 @@ RUNS_SYSTEM = (
     "explicitly), or not_stated (the paper doesn't say: don't guess from what such models usually have); "
     "scheme: its name as written ('' if not stated); moments: for microphysics, the number of moments if "
     "stated ('' otherwise); chunk: the id of the passage that says so ('' if not stated).\n"
-    "A run whose deep convection is not described is not_stated, even if the paper calls it "
+    "Look for phrases that say the physics in general: 'the standard physics', 'the default physics "
+    "package', 'the full physics', 'physics as in the operational model', 'the standard configuration "
+    "(e.g. GA7.1, RA2T) is used'. They mean the model's usual schemes are on: mark the components the "
+    "model normally has as used, with scheme '' unless named, and the passage that says so. Deep "
+    "convection is the exception: mark it used from such a phrase only if the run is not called "
+    "convection-permitting, storm-resolving, cloud-resolving or explicit, and the paper doesn't say the "
+    "convection scheme is switched off; otherwise follow what the paper says about it. A run whose "
+    "deep convection is not described is not_stated, even if the paper calls it "
     "convection-permitting, storm-resolving or km-scale: say it in name, not in the components. A paper "
     "with neither (pure theory, a review) has an empty list. Reply with JSON only.")
 
