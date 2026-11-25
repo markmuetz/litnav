@@ -95,6 +95,15 @@ def add(sub):
     p.add_argument("--label", default="")
     p.set_defaults(func=cmd_topics)
 
+    p = sub.add_parser("template", help="topic passes: route (from a topics run), inventory (jobs; then "
+                       "claude-run), tally, draft, review, revise (T0); t1 (jobs; then claude-run RUN/t1), t1-summary")
+    p.add_argument("action", choices=["route", "inventory", "tally", "draft", "review", "revise", "t1", "t1-summary"])
+    p.add_argument("--topics-run", help="route: the topics run folder")
+    p.add_argument("--topic", help="route: the topic's name (or a unique part of it)")
+    p.add_argument("--run-dir")
+    p.add_argument("-n", type=int, default=40, help="inventory: papers to inventory (a cost cap)")
+    p.set_defaults(func=cmd_template)
+
     p = sub.add_parser("claude-run", help="run a run folder's jobs.jsonl on the Anthropic API (key from "
                        "ANTHROPIC_API_KEY): open papers' text only; refuses a run with licensed text")
     p.add_argument("run_dir")
@@ -578,4 +587,35 @@ def cmd_topics(a):
         t = topics.name(Path(a.run_dir))
         for x in t["topics"]:
             print(f"{x['papers']:3d} papers  {x['name']} ({x['kind']}): {x['description']}")
+    return 0
+
+
+def cmd_template(a):
+    from .. import templates as T
+    lib = Library.find(a.library)
+    if a.action == "route":
+        rd, r = T.route(lib, Path(a.topics_run), a.topic)
+        print(f"{r['topic']}: {len(r['papers'])} open papers routed; {rd}")
+        return 0
+    rd = Path(a.run_dir)
+    if a.action == "inventory":
+        print(f"{len(T.inventory_jobs(lib, rd, n=a.n))} inventory job(s) in {rd / 'jobs.jsonl'}; next: litnav claude-run {rd}")
+    elif a.action == "tally":
+        t = T.tally(lib, rd)
+        print(f"{t['reporting_topic']} of {t['papers_inventoried']} papers report the topic; {len(t['kinds'])} kinds of detail")
+        for k in t["kinds"][:25]:
+            print(f"  {k['papers']:3d} papers ({k['with_value']} with a value)  {'; '.join(k['names'][:3])}")
+    elif a.action in ("draft", "revise"):
+        out = (T.draft if a.action == "draft" else T.revise)(rd)
+        for f in out["fields"]:
+            print(f"  {f['name']} ({f['applies_to']}, {f['form']}): {f.get('n_papers', '?')} papers"
+                  + (f"; numbers not in the evidence: {f['numbers_not_in_evidence']}" if f.get("numbers_not_in_evidence") else ""))
+    elif a.action == "review":
+        for w, v in T.review(rd).items():
+            print(f"{w}: {v['verdict']}, {len(v['issues'])} issue(s)")
+    elif a.action == "t1":
+        out = T.t1_jobs(lib, rd)
+        print(f"T1 jobs in {out}; next: litnav claude-run {out}")
+    else:
+        print(json.dumps(T.t1_summary(rd), indent=1))
     return 0
