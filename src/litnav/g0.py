@@ -399,19 +399,9 @@ def _count(papers: dict[str, list[str]], top: int) -> list[list]:
     return [[t, k] for t, k in c.most_common(top)]
 
 
-def tally(lib, rd: Path, *, top: int = 80) -> dict:
-    out = outputs(rd)
-    sv, inv = out.get("survey", {}), out.get("inventory", {})
-    clean, removed = {}, 0
-    for key, o in inv.items():
-        it = lib.get(key)
-        grams = copyfix.ngrams(it.text()) if it.has_text else set()
-        clean[key], h = scrub(o, grams, it.title)
-        removed += h
-    sources = Counter(j.get("source") for j in _jsonl(rd / "jobs.jsonl") if j.get("step") == "survey")
-    bundle = {
-        "run": rd.name, "papers_surveyed": len(sv), "papers_inventoried": len(clean),
-        "survey_sources": dict(sources), "copied_strings_removed": removed,
+def tallies(sv: dict, clean: dict, top: int = 80) -> dict:
+    """Counts across papers: survey tags and inventory answers, by the number of papers giving each."""
+    return {
         "survey": {
             "paper_kind": _count({k: [o.get("paper_kind", "")] for k, o in sv.items()}, top),
             "studies": _count({k: o.get("studies", []) for k, o in sv.items()}, top),
@@ -436,8 +426,31 @@ def tally(lib, rd: Path, *, top: int = 80) -> dict:
             "reliability_checks": _count({k: o.get("reliability_checks", []) for k, o in clean.items()}, top),
             "missing": _count({k: o.get("missing", []) for k, o in clean.items()}, top),
             "terms": _count({k: [t.get("term", "") for t in o.get("terms", [])] for k, o in clean.items()}, top)}}
+
+
+def tally(lib, rd: Path, *, top: int = 80) -> dict:
+    out = outputs(rd)
+    sv, inv = out.get("survey", {}), out.get("inventory", {})
+    clean, removed = {}, 0
+    for key, o in inv.items():
+        it = lib.get(key)
+        grams = copyfix.ngrams(it.text()) if it.has_text else set()
+        clean[key], h = scrub(o, grams, it.title)
+        removed += h
+    sources = {j["key"]: j.get("source") for j in _jsonl(rd / "jobs.jsonl") if j.get("step") == "survey"}
+    bundle = {"run": rd.name, "papers_surveyed": len(sv), "papers_inventoried": len(clean),
+              "survey_sources": dict(Counter(sources.values())), "copied_strings_removed": removed,
+              **tallies(sv, clean, top)}
     (rd / "bundle.json").write_text(json.dumps(bundle, indent=1, ensure_ascii=False))
     _write_jsonl(rd / "inventories.clean.jsonl", [{"key": k, **v} for k, v in sorted(clean.items())])
+    # Gemini's view (Mark's ruling of 25 Nov covers Claude only): survey tags from public abstracts,
+    # inventory counts from open papers only
+    opens = {r["key"] for r in _jsonl(rd / "sample.jsonl") if r.get("open")}
+    gem = {"run": rd.name, "note": "survey tags from public abstracts only; inventory counts from the open papers "
+                                   "in the sample only",
+           **tallies({k: o for k, o in sv.items() if sources.get(k) == "abstract"},
+                     {k: o for k, o in clean.items() if k in opens}, top)}
+    (rd / "bundle.open.json").write_text(json.dumps(gem, indent=1, ensure_ascii=False))
     return bundle
 
 
@@ -455,7 +468,7 @@ def evidence_text(rd: Path, *, max_chars: int = 400_000, open_only: bool = False
     """The bundle and the cleaned inventories, without passage ids, keyed by an anonymous number.
     open_only: inventories of open papers only (for Gemini: Mark's ruling of 25 Nov 2026 lets
     inventories of licensed papers go to Claude, like summaries; Gemini is not covered)."""
-    b = json.loads((rd / "bundle.json").read_text())
+    b = json.loads((rd / ("bundle.open.json" if open_only else "bundle.json")).read_text())
     inv = _jsonl(rd / "inventories.clean.jsonl")
     if open_only:
         opens = {r["key"] for r in _jsonl(rd / "sample.jsonl") if r.get("open")}

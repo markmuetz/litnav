@@ -56,6 +56,8 @@ def test_sample_push_tally_and_synthesis(ilib, monkeypatch):
     assert b["copied_strings_removed"] == 1
     assert b["survey"]["paper_kind"] == [["study", 2]]
     assert ["sampling interval", 2] in b["inventory"]["key_facts"]
+    assert (rd / "bundle.open.json").is_file()
+    assert json.loads((rd / "bundle.open.json").read_text())["inventory"]["paper_kind"] == [["study", 1]]
     ev = g0.evidence_text(rd)
     assert copied not in ev and "p1" not in ev and "smith2021cold" not in ev
 
@@ -87,10 +89,12 @@ def test_open_papers_refuses_a_licensed_paper(ilib):
 def test_gemini_sees_open_papers_inventories_only(ilib, monkeypatch):
     lib = strict(ilib)
     rd = g0.sample(lib, n=5)
-    (rd / "bundle.json").write_text("{}")
+    (rd / "bundle.json").write_text('{"x": "ALL-PAPERS-TALLY"}')
+    (rd / "bundle.open.json").write_text('{"x": "OPEN-TALLY"}')
     (rd / "inventories.clean.jsonl").write_text(
         json.dumps({"key": "smith2021cold", "contribution": "LICENSED-ONE"}) + "\n"
         + json.dumps({"key": "jones2019gravity", "contribution": "OPEN-ONE"}) + "\n")
     assert "LICENSED-ONE" in g0.evidence_text(rd)
     t = g0.evidence_text(rd, open_only=True)
     assert "OPEN-ONE" in t and "LICENSED-ONE" not in t
+    assert "OPEN-TALLY" in t and "ALL-PAPERS-TALLY" not in t
