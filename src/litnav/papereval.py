@@ -365,6 +365,33 @@ def push_reask(lib, run_dir: Path, *, submit=True, log=print) -> dict | None:
                       log=log)
 
 
+def rerun_jobs(run_dir: Path, keys: list[str]) -> list[dict]:
+    """Every job of these papers in a run, with their results (follow-ups too) set
+    aside in results.rerun-<time>.jsonl: to run them again into the same folder,
+    e.g. a paper whose experiments call failed, so its section calls ran without
+    the table."""
+    jobs = [j for j in load(run_dir / "jobs.jsonl") if j["key"] in set(keys)]
+    ids = {j["id"] for j in jobs}
+    rp = run_dir / "results.jsonl"
+    if rp.exists() and jobs:
+        rows = load(rp)
+        out = [r for r in rows if r["id"] in ids or r["id"][:-2] in ids]
+        if out:
+            save(run_dir / f"results.rerun-{dt.datetime.now():%Y%m%d-%H%M%S}.jsonl", out)
+            save(rp, [r for r in rows if not (r["id"] in ids or r["id"][:-2] in ids)])
+    return jobs
+
+
+def push_rerun(lib, run_dir: Path, keys: list[str], *, submit=True, log=print) -> dict | None:
+    from . import spool
+    task = json.loads((run_dir / "run.json").read_text())["task"]
+    jobs = rerun_jobs(run_dir, keys)
+    if not jobs:
+        return None
+    return spool.push(lib, jobs, kind="paper-eval", meta={"run_dir": str(run_dir), "task": task}, submit=submit,
+                      log=log)
+
+
 def push(lib, eval_path: Path, task: str, *, model_hint="batch", chars: int | None = None, submit=True,
          log=print) -> dict:
     from . import spool

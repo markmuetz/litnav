@@ -103,6 +103,11 @@ def local_dir(lib, bid: str) -> Path:
     return lib.root / "derived" / "batches" / bid
 
 
+def mine(lib, cfg: dict, b: dict) -> bool:
+    """The batch went to this spool (batches from before spools had profiles: the default one)."""
+    return b.get("spool", (lib.config.get("batch_remote") or {}).get("spool")) == cfg["spool"]
+
+
 def in_flight(lib) -> set:
     return {i for b in load_state(lib).values() if b["state"] != "done" for i in b["jobs"]}
 
@@ -135,7 +140,7 @@ def push(lib, jobs: list | None = None, *, kind: str = "queue", meta: dict | Non
     _ssh(cfg, f"mv {sp}/inbox/{bid}.part {sp}/inbox/{bid}")
     st = load_state(lib)
     st[bid] = {"state": "pushed", "kind": kind, "pushed": dt.datetime.now().isoformat(timespec="seconds"),
-               "jobs": [j["id"] for j in jobs], "imported": [], **(meta or {})}
+               "spool": cfg["spool"], "jobs": [j["id"] for j in jobs], "imported": [], **(meta or {})}
     save_state(lib, st)
     log(f"pushed batch {bid}: {len(jobs)} job(s)")
     job = submit_worker(lib, cfg, log=log) if submit else None
@@ -179,7 +184,7 @@ def pull(lib, *, log=print) -> dict:
     """Fetch and apply the new results of every open batch; delete finished ones."""
     cfg = remote_cfg(lib)
     st = load_state(lib)
-    open_ = [b for b, v in st.items() if v["state"] != "done"]
+    open_ = [b for b, v in st.items() if v["state"] != "done" and mine(lib, cfg, v)]
     if not open_:
         return {}
     where = _remote_where(cfg, open_)
@@ -276,4 +281,4 @@ def status(lib) -> dict:
              if len(l.split()) == 4]
     return {"job": worker_job(cfg), "worker": worker, "spool": spool,
             "local": {b: {k: (len(v) if isinstance(v, list) else v) for k, v in s.items()}
-                      for b, s in load_state(lib).items() if s["state"] != "done"}}
+                      for b, s in load_state(lib).items() if s["state"] != "done" and mine(lib, cfg, s)}}

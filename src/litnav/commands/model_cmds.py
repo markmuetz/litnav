@@ -35,7 +35,7 @@ def add(sub):
     p = sub.add_parser("paper-eval", help="evaluate models at whole-paper tasks (summary, extract) on open "
                        "papers, judged by Claude: pick, gold, run, push, baseline, judge, report")
     p.add_argument("action", choices=["pick", "gold", "run", "push", "baseline", "judge", "report", "compare",
-                                      "agree", "reask"],
+                                      "agree", "reask", "rerun"],
                    help="compare: --run-dir A --against B, item by item; agree: Claude's and Gemini's judgments "
                         "of one run")
     p.add_argument("--eval", default="eval/paper-eval.jsonl")
@@ -52,6 +52,9 @@ def add(sub):
                    "(default 72000, the pilot's; 0 = the whole paper); for mentions, the characters per call "
                    "(default 20000; the whole paper is read). Fixed per run, recorded in run.json")
     p.add_argument("--against", help="compare: the second run folder")
+    p.add_argument("--key", "-k", action="append", dest="keys",
+                   help="rerun: a paper to run again into --run-dir, all its calls (repeat); pushed to the spool "
+                        "chosen by -M")
     p.add_argument("--push", action="store_true", help="reask: send the re-asks to the cluster spool "
                    "(after `queue pull`), not to [local_model]")
     p.set_defaults(func=cmd_paper_eval)
@@ -366,6 +369,13 @@ def cmd_paper_eval(a):
         hint = spool.remote_cfg(lib).get("profile") or "batch"     # -M gpt-oss: its own spool and run name
         r = P.push(lib, ev, a.task, model_hint=hint, chars=a.chars, submit=not a.no_submit, log=log)
         log(f"pushed batch {r['batch']}; `litnav queue pull` brings it back")
+        return
+    if a.action == "rerun":
+        if not (a.run_dir and a.keys):
+            log("rerun needs --run-dir and at least one -k KEY")
+            return 2
+        r = P.push_rerun(lib, Path(a.run_dir), a.keys, submit=not a.no_submit, log=log)
+        log(f"pushed {r['jobs']} job(s) again; `litnav queue pull` brings them back" if r else "no such papers in the run")
         return
     rd = Path(a.run_dir) if a.run_dir else max((lib.root / "derived" / "paper-eval").glob(f"{a.task}-*"),
                                                key=lambda p: p.stat().st_mtime)

@@ -134,3 +134,33 @@ def test_a_model_profile_has_its_own_spool(ilib, monkeypatch):
     assert c["spool"] == "~/spool-gpt-oss" and c["host"] == "cluster" and c["job_name"] == "llm-gpt-oss"
     monkeypatch.setenv("LITNAV_MODEL_PROFILE", "orchid")              # a profile with no spool of its own
     assert spool.remote_cfg(ilib)["spool"] == "~/litnav-spool"
+
+
+def test_pull_and_status_see_only_their_own_spool(ilib, monkeypatch):
+    """Two models' batches in one state file: each spool's pull leaves the other's alone."""
+    from litnav import spool
+    configure(ilib)
+    ilib.config["batch_remote"]["profiles"] = {"gpt-oss": {"spool": "~/spool-gpt-oss"}}
+    spool.save_state(ilib, {"a": {"state": "pushed", "kind": "queue", "jobs": [], "imported": []},   # old: default
+                            "b": {"state": "pushed", "kind": "queue", "jobs": [], "imported": [],
+                                  "spool": "~/spool-gpt-oss"}})
+    seen = []
+    monkeypatch.setattr(spool, "_remote_where", lambda cfg, ids: seen.append(sorted(ids)) or {})
+    monkeypatch.delenv("LITNAV_MODEL_PROFILE", raising=False)
+    spool.pull(ilib, log=lambda *a: None)
+    monkeypatch.setenv("LITNAV_MODEL_PROFILE", "gpt-oss")
+    spool.pull(ilib, log=lambda *a: None)
+    assert seen == [["a"], ["b"]]
+
+
+def test_rerun_sets_a_papers_results_aside(tmp_path):
+    from litnav import papereval as P
+    P.save(tmp_path / "jobs.jsonl", [{"id": "m-a--runs", "key": "a"}, {"id": "m-a--g01", "key": "a"},
+                                     {"id": "m-b--g01", "key": "b"}])
+    P.save(tmp_path / "results.jsonl", [{"id": "m-a--g01", "ok": True}, {"id": "m-a--g01-r", "ok": True},
+                                        {"id": "m-b--g01", "ok": True}])
+    jobs = P.rerun_jobs(tmp_path, ["a"])
+    assert [j["id"] for j in jobs] == ["m-a--runs", "m-a--g01"]
+    assert [r["id"] for r in P.load(tmp_path / "results.jsonl")] == ["m-b--g01"]
+    (aside,) = tmp_path.glob("results.rerun-*.jsonl")
+    assert len(P.load(aside)) == 2
