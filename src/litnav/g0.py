@@ -451,10 +451,15 @@ def _strip_passages(o):
     return o
 
 
-def evidence_text(rd: Path, *, max_chars: int = 400_000) -> str:
-    """The bundle and the cleaned inventories, without passage ids, keyed by an anonymous number."""
+def evidence_text(rd: Path, *, max_chars: int = 400_000, open_only: bool = False) -> str:
+    """The bundle and the cleaned inventories, without passage ids, keyed by an anonymous number.
+    open_only: inventories of open papers only (for Gemini: Mark's ruling of 25 Nov 2026 lets
+    inventories of licensed papers go to Claude, like summaries; Gemini is not covered)."""
     b = json.loads((rd / "bundle.json").read_text())
     inv = _jsonl(rd / "inventories.clean.jsonl")
+    if open_only:
+        opens = {r["key"] for r in _jsonl(rd / "sample.jsonl") if r.get("open")}
+        inv = [r for r in inv if r["key"] in opens]
     parts = ["## Tallies (term, number of papers)", json.dumps(b, ensure_ascii=False), "",
              "## Inventories, one per paper (written by a local model from the paper's text)"]
     used = sum(len(p) for p in parts)
@@ -567,8 +572,9 @@ REVIEW_SYSTEM = (
     "consistent with the schema. Be specific: say where, what the problem is and what to do.")
 
 
-def _prompt(rd: Path, lib=None, *, n_open: int = 10, open_chars: int = 30_000, extra: str = "") -> str:
-    parts = ["# The fixed core", CORE, "# The purpose", PURPOSE, "# Evidence", evidence_text(rd)]
+def _prompt(rd: Path, lib=None, *, n_open: int = 10, open_chars: int = 30_000, extra: str = "",
+            open_only: bool = False) -> str:
+    parts = ["# The fixed core", CORE, "# The purpose", PURPOSE, "# Evidence", evidence_text(rd, open_only=open_only)]
     if lib is not None and n_open:
         parts.append("## Open-access papers (full text, truncated)")
         for it, text in open_papers(lib, rd, n_open, open_chars):
@@ -632,11 +638,13 @@ def drafts(rd: Path) -> list[Path]:
 def review(lib, rd: Path, *, who=("opus", "gemini")) -> dict:
     d = drafts(rd)[-1]
     draft = json.loads(d.read_text())["schema"]
-    prompt = _prompt(rd, extra="# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False))
+    extra = "# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False)
     out = {}
     for w in who:
-        out[w] = (_claude(OPUS, REVIEW_SYSTEM, prompt, REVIEW_SCHEMA) if w == "opus"
-                  else _gemini(REVIEW_SYSTEM, prompt, REVIEW_SCHEMA))
+        out[w] = (_claude(OPUS, REVIEW_SYSTEM, _prompt(rd, extra=extra), REVIEW_SCHEMA) if w == "opus"
+                  else _gemini(REVIEW_SYSTEM, _prompt(rd, extra=extra + "\n\n(The inventories above are those of "
+                                                      "the open-access papers in the sample only.)", open_only=True),
+                               REVIEW_SCHEMA))
     (rd / f"review-{d.stem}.json").write_text(json.dumps(out, indent=1, ensure_ascii=False))
     return out
 

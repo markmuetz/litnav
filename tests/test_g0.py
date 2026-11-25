@@ -82,3 +82,15 @@ def test_open_papers_refuses_a_licensed_paper(ilib):
     (rd / "sample.jsonl").write_text("".join(json.dumps(r) + "\n" for r in lines))
     with pytest.raises(Exception):
         g0.open_papers(lib, rd, 5, 1000)
+
+
+def test_gemini_sees_open_papers_inventories_only(ilib, monkeypatch):
+    lib = strict(ilib)
+    rd = g0.sample(lib, n=5)
+    (rd / "bundle.json").write_text("{}")
+    (rd / "inventories.clean.jsonl").write_text(
+        json.dumps({"key": "smith2021cold", "contribution": "LICENSED-ONE"}) + "\n"
+        + json.dumps({"key": "jones2019gravity", "contribution": "OPEN-ONE"}) + "\n")
+    assert "LICENSED-ONE" in g0.evidence_text(rd)
+    t = g0.evidence_text(rd, open_only=True)
+    assert "OPEN-ONE" in t and "LICENSED-ONE" not in t
