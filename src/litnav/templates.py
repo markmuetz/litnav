@@ -291,6 +291,9 @@ def t1_jobs(lib, rd: Path, *, keys: list[str] | None = None) -> Path:
     return out
 
 
+_PID = re.compile(r"[A-Za-z0-9_.-]+#[a-z]+#[0-9a-f]{6,}")
+
+
 def t1_summary(rd: Path) -> dict:
     """How many papers state each field (at least one value), and how many values cite a passage that is not
     one of the paper's ids."""
@@ -304,8 +307,9 @@ def t1_summary(rd: Path) -> dict:
         for v in r["output"].get("values") or []:
             filled.setdefault(v["field"], set()).add(r["id"])
             total += 1
-            v["passage"] = v.get("passage", "").strip().strip("[]").strip()     # Haiku copies the brackets
-            bad += v["passage"] not in ids.get(r["id"], set())
+            cited = _PID.findall(v.get("passage", ""))    # Haiku adds brackets, quotes, or several ids
+            v["passages"] = cited
+            bad += not cited or any(c not in ids.get(r["id"], set()) for c in cited)
     tpl = json.loads(_drafts(rd)[-1].read_text())["template"]["fields"]
     s = {"papers": len(ok), "failed": len(res) - len(ok), "reporting_topic": len(rep),
          "experiments": sum(len(r["output"].get("experiments") or []) for r in rep),
