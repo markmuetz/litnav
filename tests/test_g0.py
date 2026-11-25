@@ -121,3 +121,15 @@ def test_strip_limits_for_anthropic():
     from litnav import batch_runner
     s = batch_runner.strip_limits(g0.inventory_schema(["a"]))
     assert "maxItems" not in json.dumps(s) and "enum" in json.dumps(s)
+
+
+def test_rules_cite_papers_and_numbers_are_checked(tmp_path):
+    (tmp_path / "inventory_index.json").write_text(json.dumps({"1": "a2020", "2": "b2021"}))
+    out = {"proposed_rules": [
+        {"rule": "Runs shorter than 30 days cannot support climate claims.", "inventories": [1, 2, 9]},
+        {"rule": "A correlation below 0.3 is weak; two grades.", "inventories": []}]}
+    ev = "Paper 1 ran for 30 days. Paper 2 used 3 km."
+    res = g0.check_rules(tmp_path, out, ev)
+    assert res[0]["papers"] == ["a2020", "b2021"] and res[0]["numbers_not_in_evidence"] == []
+    assert res[1]["n_papers"] == 0 and res[1]["numbers_not_in_evidence"] == ["0.3"]
+    assert "inventories" in g0.SCHEMA_OUT["properties"]["proposed_rules"]["items"]["required"]

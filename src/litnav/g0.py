@@ -514,6 +514,8 @@ def evidence_text(rd: Path, *, max_chars: int = 1_600_000, open_only: bool = Fal
     parts = ["## Tallies (term, number of papers)", json.dumps(b, ensure_ascii=False), "",
              "## Inventories, one per paper (written by a local model from the paper's text)"]
     used = sum(len(p) for p in parts)
+    (rd / ("inventory_index.open.json" if open_only else "inventory_index.json")).write_text(
+        json.dumps({str(i): r["key"] for i, r in enumerate(inv, 1)}))       # Paper N -> key, for the rule checks
     for i, r in enumerate(inv, 1):
         r = _strip_passages({k: v for k, v in r.items() if k != "key"})
         s = f"### Paper {i}\n{json.dumps(r, ensure_ascii=False)}"
@@ -563,8 +565,10 @@ SCHEMA_OUT = {
             "type": "object", "additionalProperties": False, "required": ["name", "definition", "why"],
             "properties": {"name": {"type": "string"}, "definition": {"type": "string"}, "why": {"type": "string"}}}},
         "proposed_rules": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["rule", "basis", "needs_approval"],
+            "type": "object", "additionalProperties": False,
+            "required": ["rule", "basis", "inventories", "needs_approval"],
             "properties": {"rule": {"type": "string"}, "basis": {"type": "string"},
+                           "inventories": {"type": "array", "items": {"type": "integer"}},
                            "needs_approval": {"type": "boolean"}}}},
         "conditions": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["dimension", "definition", "examples"],
@@ -591,10 +595,12 @@ SYNTH_SYSTEM = (
     "definition, form (as written / a closed list / a number) and why it is needed.\n"
     "- classifying_facts: the few facts about an experiment that decide which evidence kind it is or how "
     "far its results can be compared, and why.\n"
-    "- proposed_rules: rules that turn those facts into classes (e.g. thresholds). Each is a proposal for a "
-    "person to approve: say what in the evidence it is based on.\n"
+    "- proposed_rules: rules that turn those facts into classes. Each is a proposal: say what in the "
+    "evidence it is based on, and list in inventories the numbers of the inventories (Paper N) it rests on. "
+    "Use only criteria and numbers that appear in the evidence; if a rule needs one that does not, say in "
+    "basis that it is your own.\n"
     "- conditions: the vocabulary of conditions that limit where claims hold.\n"
-    "- topics: 15-25 candidate topics: aspects that many papers report in detail (a method, a kind of "
+    "- topics: candidate topics: aspects that many papers report in detail (a method, a kind of "
     "experiment, a phenomenon, a kind of data), which may cut across sub-fields, with roughly what share "
     "of papers they cover.\n"
     "- g1_prompt: the complete system prompt for the general extraction pass, for a mid-sized local model "
@@ -672,11 +678,33 @@ def synthesize(lib, rd: Path, *, model: str = FABLE, n_open: int = 10, open_char
     prompt = _prompt(rd, lib, n_open=n_open, open_chars=open_chars)
     (rd / "synthesis.prompt.md").write_text(prompt, encoding="utf-8")
     out = _claude(model, SYNTH_SYSTEM, prompt, SCHEMA_OUT)
-    _save_draft(rd, out, model, "draft-1")
+    _save_draft(rd, out, model, "draft-1", evidence=prompt)
     return out
 
 
-def _save_draft(rd: Path, out: dict, model: str, name: str) -> None:
+_NUM = __import__("re").compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.]*\d)")
+
+
+def check_rules(rd: Path, out: dict, evidence: str) -> list[dict]:
+    """For each proposed rule: the papers it says it rests on (Paper N mapped to keys) and the numbers in
+    it that appear nowhere in the evidence the model was given (the model's own additions, to check).
+    Single digits are not checked (counts such as 'two grades' and list numbering)."""
+    import re
+    idx = json.loads((rd / "inventory_index.json").read_text()) if (rd / "inventory_index.json").is_file() else {}
+    res = []
+    for r in out.get("proposed_rules") or []:
+        keys = sorted({idx[str(i)] for i in r.get("inventories") or [] if str(i) in idx})
+        nums = {n for n in _NUM.findall(r.get("rule", "")) if len(n) > 1}
+        missing = sorted(n for n in nums if not re.search(rf"(?<![\w.]){re.escape(n)}(?![\w]|\.\d)", evidence))
+        res.append({"rule": r.get("rule", "")[:120], "papers": keys, "n_papers": len(keys),
+                    "numbers_not_in_evidence": missing})
+    return res
+
+
+def _save_draft(rd: Path, out: dict, model: str, name: str, evidence: str | None = None) -> None:
+    if evidence is not None:
+        (rd / f"rules-check-{name}.json").write_text(json.dumps(check_rules(rd, out, evidence), indent=1,
+                                                                ensure_ascii=False))
     (rd / f"{name}.json").write_text(json.dumps({"model": model, "prompt_version": PROMPT_VERSION,
                                                  "at": dt.datetime.now().isoformat(timespec="seconds"),
                                                  "schema": out}, indent=1, ensure_ascii=False))
@@ -689,7 +717,7 @@ def drafts(rd: Path) -> list[Path]:
 def review(lib, rd: Path, *, who=("opus", "gemini")) -> dict:
     d = drafts(rd)[-1]
     draft = json.loads(d.read_text())["schema"]
-    prompt = _prompt(rd, extra="# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False))
+    prompt = _prompt(rd, lib, extra="# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False))
     out = {}
     for w in who:          # inventories and tallies may go to Claude and Gemini alike (Mark, 25 Nov 2026)
         out[w] = (_claude(OPUS, REVIEW_SYSTEM, prompt, REVIEW_SCHEMA) if w == "opus"
@@ -707,8 +735,8 @@ def revise(lib, rd: Path, *, model: str = FABLE) -> dict:
              + "\n\n# Two reviews of it\n" + rv.read_text()
              + "\n\nRevise the draft: act on each issue you agree with, and say in notes which you did not "
                "act on and why.")
-    out = _claude(model, SYNTH_SYSTEM, _prompt(rd, extra=extra), SCHEMA_OUT)
-    _save_draft(rd, out, model, f"draft-{int(d.stem.split('-')[1]) + 1}")
+    out = _claude(model, SYNTH_SYSTEM, _prompt(rd, lib, extra=extra), SCHEMA_OUT)    # open papers too, as in synthesis
+    _save_draft(rd, out, model, f"draft-{int(d.stem.split('-')[1]) + 1}", evidence=_prompt(rd, lib))
     return out
 
 
