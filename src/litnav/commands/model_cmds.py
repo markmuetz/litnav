@@ -87,6 +87,14 @@ def add(sub):
     p.add_argument("--label", default="")
     p.set_defaults(func=cmd_model_registry)
 
+    p = sub.add_parser("topics", help="topics drawn from the literature: per-paper aspects (open vocabulary), "
+                       "consensus clusters, named by a strong model (jobs, then claude-run; cluster; name)")
+    p.add_argument("action", choices=["jobs", "cluster", "name"])
+    p.add_argument("--run-dir")
+    p.add_argument("--all", action="store_true", help="jobs: every paper the local model may read (default: open only)")
+    p.add_argument("--label", default="")
+    p.set_defaults(func=cmd_topics)
+
     p = sub.add_parser("claude-run", help="run a run folder's jobs.jsonl on the Anthropic API (key from "
                        "ANTHROPIC_API_KEY): open papers' text only; refuses a run with licensed text")
     p.add_argument("run_dir")
@@ -551,4 +559,23 @@ def cmd_model_registry(a):
         for c in voc["classes"]:
             print(f"{c['id']}: {c['deep_convection']}; {len(c['papers'])} papers; span {c['span_m']}; "
                   f"terms {c['terms'][:6]}")
+    return 0
+
+
+def cmd_topics(a):
+    from .. import topics
+    lib = Library.find(a.library)
+    if a.action == "jobs":
+        rd = topics.new_run(lib, open_only=not a.all, label=a.label)
+        print(f"{json.loads((rd / 'run.json').read_text())['papers']} job(s) in {rd}")
+    elif a.action == "cluster":
+        c = topics.cluster(lib, Path(a.run_dir))
+        print(f"{c['aspects']} aspects from {c['papers']} papers; {len(c['clusters'])} recurring clusters; "
+              f"{c['singletons']} aspects in no recurring cluster")
+        for x in c["clusters"][:40]:
+            print(f"  {x['id']} {x['papers']:3d} papers  {'; '.join(x['sample'][:4])}")
+    else:
+        t = topics.name(Path(a.run_dir))
+        for x in t["topics"]:
+            print(f"{x['papers']:3d} papers  {x['name']} ({x['kind']}): {x['description']}")
     return 0
