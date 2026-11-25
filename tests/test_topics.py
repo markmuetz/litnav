@@ -38,3 +38,10 @@ def test_cluster_keeps_recurring_topics(tmp_path):
     (tmp_path / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     c = topics.cluster(None, tmp_path, FakeEmb())
     assert [x["keys"] for x in c["clusters"]] == [["a", "b"]] and c["singletons"] == 1
+
+
+def test_consensus_does_not_chain():
+    """A line of points (each close to its neighbour) must not collapse into one cluster."""
+    m = np.array([[np.cos(t), np.sin(t)] for t in np.linspace(0, np.pi, 120)], dtype="float32")
+    lab = topics.consensus(m, sweep=(4, 6, 8, 12), seeds=(0, 1))
+    assert 3 <= len(set(lab)) <= 20

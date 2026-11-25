@@ -79,35 +79,47 @@ def aspects(rd: Path) -> list[dict]:
 
 
 def consensus(m, *, sweep=SWEEP, seeds=SEEDS, agree=AGREE) -> list[int]:
-    """Cluster labels from the co-association of rows across k-means runs (cosine): rows i and j are
-    joined when they fall together in at least `agree` of the runs; clusters are the connected parts."""
+    """Cluster labels from the co-association of rows across k-means runs (cosine). Rows that fall
+    together in every run form atoms; atoms are merged by average linkage while the average share of runs
+    in which their members fall together is at least `agree`. (Joining any pair above `agree`, single
+    linkage, chains everything into one cluster: the first try, 25 Nov 2026.)"""
     import numpy as np
     from .field import kmeans
     n = len(m)
-    co = np.zeros((n, n), dtype="float32")
-    runs = 0
     ks = [k for k in sweep if k < n] or list(range(2, n))     # a small input: the granularities that fit
+    labs = []
     for k in ks:
-        for s in seeds:
-            lab, _ = kmeans(m, k, seed=s)
-            lab = np.asarray(lab)
-            co += lab[:, None] == lab[None, :]
-            runs += 1
-    co /= max(1, runs)
-    parent = list(range(n))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-    ii, jj = np.nonzero(np.triu(co >= agree, 1))
-    for i, j in zip(ii, jj):
-        a, b = find(int(i)), find(int(j))
-        if a != b:
-            parent[a] = b
+        for s_ in seeds:
+            lab, _ = kmeans(m, k, seed=s_)
+            labs.append(np.asarray(lab))
+    if not labs:
+        return list(range(n))
+    L = np.stack(labs, axis=1)                                 # rows x runs
+    atoms, inv = np.unique(L, axis=0, return_inverse=True)
+    inv = np.asarray(inv).ravel()
+    size = np.bincount(inv, minlength=len(atoms)).astype("float64")
+    sim = np.zeros((len(atoms), len(atoms)))
+    for r in range(L.shape[1]):
+        sim += atoms[:, r][:, None] == atoms[:, r][None, :]
+    sim /= L.shape[1]
+    np.fill_diagonal(sim, -1.0)
+    alive = np.ones(len(atoms), dtype=bool)
+    group = np.arange(len(atoms))
+    while True:
+        s_ = np.where(alive[:, None] & alive[None, :], sim, -1.0)
+        i, j = np.unravel_index(int(np.argmax(s_)), s_.shape)
+        if s_[i, j] < agree:
+            break
+        ni, nj = size[i], size[j]
+        sim[i, :] = (ni * sim[i, :] + nj * sim[j, :]) / (ni + nj)     # average linkage (Lance-Williams)
+        sim[:, i] = sim[i, :]
+        sim[i, i] = -1.0
+        size[i] = ni + nj
+        alive[j] = False
+        group[group == j] = i
     roots = {}
-    return [roots.setdefault(find(i), len(roots)) for i in range(n)]
+    gl = [roots.setdefault(int(g), len(roots)) for g in group]
+    return [gl[a] for a in inv]
 
 
 def cluster(lib, rd: Path, embedder=None) -> dict:
