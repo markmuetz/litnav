@@ -77,6 +77,14 @@ def add(sub):
     p.add_argument("--no-submit", action="store_true")
     p.set_defaults(func=cmd_g0)
 
+    p = sub.add_parser("model-registry", help="which models each paper runs, at what grid spacing, and what it "
+                       "states about deep convection; aggregated by model family (jobs, then claude-run or push, build)")
+    p.add_argument("action", choices=["jobs", "build"])
+    p.add_argument("--run-dir")
+    p.add_argument("--all", action="store_true", help="jobs: every paper the local model may read (default: open only)")
+    p.add_argument("--label", default="")
+    p.set_defaults(func=cmd_model_registry)
+
     p = sub.add_parser("claude-run", help="run a run folder's jobs.jsonl on the Anthropic API (key from "
                        "ANTHROPIC_API_KEY): open papers' text only; refuses a run with licensed text")
     p.add_argument("run_dir")
@@ -514,4 +522,18 @@ def cmd_claude_run(a):
     lib = Library.find(a.library)
     n = g0.run_outside(lib, Path(a.run_dir), model=a.model, effort=a.effort, concurrency=a.concurrency)
     print(f"{n} job(s) done")
+    return 0
+
+
+def cmd_model_registry(a):
+    from .. import modelreg
+    lib = Library.find(a.library)
+    if a.action == "jobs":
+        rd = modelreg.new_run(lib, open_only=not a.all, label=a.label)
+        print(f"{json.loads((rd / 'run.json').read_text())['papers']} job(s) in {rd}")
+        return 0
+    reg = modelreg.build(Path(a.run_dir))
+    agreed = sum(e["verdict"] in ("parametrized", "explicit") for e in reg["entries"])
+    print(f"{reg['papers']} papers; {len(reg['entries'])} family x grid-class entries, {agreed} agreed, "
+          f"{sum(e['verdict'] == 'disputed' for e in reg['entries'])} disputed")
     return 0
