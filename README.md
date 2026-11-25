@@ -72,6 +72,8 @@ model you run yourself (Ollama on your laptop, or a batch on a GPU cluster),
 `litnav licences` marks Creative Commons papers open, a Claude Code hook
 keeps agents out of the rest, and `litnav ask-local` lets your agent hand a
 question about those papers to your local model. See [`docs/local-models.md`](docs/local-models.md).
+Commands for building and filling a claim graph's schema (G0, the model registry, topics, topic templates,
+saturation): [`docs/passes.md`](docs/passes.md).
 
 ## Licence
 
