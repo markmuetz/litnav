@@ -15,7 +15,8 @@ from pathlib import Path
 
 from . import sharing as S
 
-PROMPT_VERSION = 2              # v2: the authors' own labels for runs, and definitions of model classes
+PROMPT_VERSION = 3              # v2: the authors' own labels for runs, and definitions of model classes;
+                                # v3: each process's state per run, and the process a definition concerns
 CHARS = 200_000
 
 KINDS = ["global_climate_model", "earth_system_model", "global_nwp_model", "global_storm_resolving_model",
@@ -23,6 +24,7 @@ KINDS = ["global_climate_model", "earth_system_model", "global_nwp_model", "glob
          "idealized_model", "machine_learning_model", "reanalysis_system", "other"]
 ROLES = ["run_in_this_paper", "output_used", "described_only", "cited_only"]
 DEEP = ["parametrized", "explicit", "both", "not_stated"]
+STATES = ["parametrized", "explicit", "partly", "absent"]      # a process's state in a run (v3)
 
 SYSTEM = """You read one scientific paper and list every numerical model or model configuration in it.
 
@@ -45,12 +47,21 @@ For each distinct model configuration (a model at one setting: name, version, gr
 - author_label: the paper's own words for what kind of model or simulation this is, as written (e.g.
   "convection-permitting", "large-eddy simulation", "cloud-resolving model", "global storm-resolving model",
   "GCM", "superparameterized"); "" if the paper gives none.
+- processes: for every physical process whose treatment the paper states for this configuration (e.g. deep
+  convection, shallow convection, turbulence or the boundary layer, microphysics, radiation, gravity-wave
+  drag), the process as the paper names it; its state: parametrized (a scheme represents it), explicit
+  (the model resolves or permits it, no scheme), partly (a scale-aware or reduced scheme, or the paper says
+  the process is partly resolved, as in a grey zone), or absent (not represented, e.g. a dry model); the
+  scheme's name if stated; and the passage. Only what the paper states; [] if it states none.
 
 Then list definitions: every place the paper defines or characterises a class of model or a range of grid
 spacing (e.g. what it calls convection-permitting, the grey zone, LES, storm-resolving, kilometre-scale):
 - term: the term as written.
 - meaning: what the paper says it means, in your own words.
 - grid_spacing: the grid spacing or range the paper ties to it, as written ("" if none).
+- process: the physical process the term concerns, as the paper says (e.g. "deep convection", "turbulence");
+  "" if the paper ties it to no process. A term such as "grey zone" may concern different processes in
+  different papers: give the one this paper means.
 - passage: the id of the passage.
 Only what the paper says; [] if it defines nothing.
 
@@ -66,13 +77,20 @@ def schema(ids: list[str]) -> dict:
                             "kind": {"type": "string", "enum": KINDS}, "role": {"type": "string", "enum": ROLES},
                             "horizontal_grid_spacing": {"type": "string"},
                             "deep_convection": {"type": "string", "enum": DEEP}, "scheme": {"type": "string"},
-                            "convection_passage": pid, "grid_passage": pid, "author_label": {"type": "string"}},
+                            "convection_passage": pid, "grid_passage": pid, "author_label": {"type": "string"},
+                            "processes": {"type": "array", "items": {
+                                "type": "object", "additionalProperties": False,
+                                "required": ["process", "state", "scheme", "passage"],
+                                "properties": {"process": {"type": "string"},
+                                               "state": {"type": "string", "enum": STATES},
+                                               "scheme": {"type": "string"}, "passage": pid}}}},
              "required": ["name", "family", "configuration", "kind", "role", "horizontal_grid_spacing",
-                          "deep_convection", "scheme", "convection_passage", "grid_passage", "author_label"]}
+                          "deep_convection", "scheme", "convection_passage", "grid_passage", "author_label",
+                          "processes"]}
     defn = {"type": "object", "additionalProperties": False,
             "properties": {"term": {"type": "string"}, "meaning": {"type": "string"},
-                           "grid_spacing": {"type": "string"}, "passage": pid},
-            "required": ["term", "meaning", "grid_spacing", "passage"]}
+                           "grid_spacing": {"type": "string"}, "process": {"type": "string"}, "passage": pid},
+            "required": ["term", "meaning", "grid_spacing", "process", "passage"]}
     return {"type": "object", "additionalProperties": False,
             "properties": {"models": {"type": "array", "items": entry}, "definitions": {"type": "array", "items": defn}},
             "required": ["models", "definitions"]}
@@ -146,7 +164,8 @@ def build(rd: Path) -> dict:
                           "configuration": m.get("configuration", ""), "role": m.get("role", ""),
                           "grid": m.get("horizontal_grid_spacing", ""), "dx_m": _dx(m.get("horizontal_grid_spacing")),
                           "deep_convection": m.get("deep_convection") if m.get("convection_passage") else "not_stated",
-                          "passage": m.get("convection_passage", ""), "author_label": m.get("author_label", "")})
+                          "passage": m.get("convection_passage", ""), "author_label": m.get("author_label", ""),
+                          "processes": [x for x in m.get("processes") or [] if x.get("passage")]})
         for d in out.get("definitions", []):
             defs.append({"key": key, **d, "dx_m": _dx(d.get("grid_spacing"))})
     reg = {"run": rd.name, "prompt_version": json.loads((rd / "run.json").read_text()).get("prompt_version"),
@@ -220,16 +239,20 @@ def score_stated(reg: dict, match=None) -> dict:
 
 CLASSES_SYSTEM = """You are given definitions of classes of numerical model, each taken from a scientific paper
 (the term as the paper writes it, what the paper says it means, any grid spacing the paper ties to it). Group
-the terms that name the same class of model, using only what the definitions say, not what you know. For each
-class give: id (a short snake_case name from the most common term), name, terms (every term in the group, as
-written), deep_convection (what the definitions say: explicit, parametrized, either, or not_said), and refs
-(the numbers of the definitions in the group). Terms that are not classes of model (a range of grid spacing,
-such as the grey zone, is fine: treat it as a class) go in no group. Reply with JSON only."""
+the definitions that name the same class, using only what the definitions say, not what you know. A class is a
+sense: the same term used for different things goes into different classes (e.g. a grey zone for deep
+convection and a grey zone for turbulence are two classes). Each definition may give the process it concerns.
+For each class give: id (a short snake_case name from the most common term, with the process if the term has
+several senses), name, process (the physical process the class is about, snake_case, from the definitions;
+"deep_convection" when that is the process; "general" when the definitions tie it to none), terms (every term
+in the group, as written), deep_convection (what the definitions say about deep convection in this class:
+explicit, parametrized, either, or not_said), and refs (the numbers of the definitions in the group).
+Definitions that name no class of model or range of grid spacing go in no group. Reply with JSON only."""
 
 CLASSES_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["classes"], "properties": {
     "classes": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                "required": ["id", "name", "terms", "deep_convection", "refs"],
-                "properties": {"id": {"type": "string"}, "name": {"type": "string"},
+                "required": ["id", "name", "process", "terms", "deep_convection", "refs"],
+                "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "process": {"type": "string"},
                                "terms": {"type": "array", "items": {"type": "string"}},
                                "deep_convection": {"type": "string",
                                                    "enum": ["explicit", "parametrized", "either", "not_said"]},
@@ -243,8 +266,8 @@ def induce_classes(rd: Path, *, model: str = "claude-opus-5-5") -> dict:
     from .g0 import _claude
     reg = json.loads((rd / "registry.json").read_text())
     defs = reg["definitions"]
-    lines = "\n".join(f"{i}. term: {d['term']} | meaning: {d['meaning']} | grid spacing: {d.get('grid_spacing') or '-'}"
-                      for i, d in enumerate(defs, 1))
+    lines = "\n".join(f"{i}. term: {d['term']} | process: {d.get('process') or '-'} | meaning: {d['meaning']} | "
+                      f"grid spacing: {d.get('grid_spacing') or '-'}" for i, d in enumerate(defs, 1))
     out = _claude(model, CLASSES_SYSTEM, f"Definitions ({len(defs)}):\n{lines}", CLASSES_SCHEMA)
     classes = []
     for c in out.get("classes", []):
@@ -276,7 +299,8 @@ def explicit_class(reg: dict | None, label: str, dx_m: float | None) -> str:
     """The class of a run with explicit deep convection, from the induced vocabulary only: a class one of
     whose terms appears in the authors' label; else the one explicit class whose definitions' grid
     spacings span the run's; else explicit_model. No terms or thresholds of ours."""
-    classes = [c for c in (reg or {}).get("classes", []) if c.get("deep_convection") in ("explicit", "either")]
+    classes = [c for c in (reg or {}).get("classes", []) if c.get("deep_convection") in ("explicit", "either")
+               and c.get("process", "deep_convection") in ("deep_convection", "general")]   # the sense that matters here
     if not classes:
         return "explicit_model"
     lab = " " + _norm_term(label) + " "

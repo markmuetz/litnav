@@ -57,3 +57,24 @@ def test_jobs_open_only(ilib):
     rd = modelreg.new_run(lib)
     keys = [json.loads(l)["key"] for l in (rd / "jobs.jsonl").read_text().splitlines()]
     assert keys == ["jones2019gravity"] and all(lib.get(k).allowed(S.SEND_OUT) for k in keys)
+
+
+def test_v3_processes_and_senses(tmp_path):
+    rows = [{"id": "modelreg-a2020", "ok": True, "output": {"models": [
+        {"name": "UM", "family": "UM", "configuration": "", "role": "run_in_this_paper",
+         "horizontal_grid_spacing": "1.5 km", "deep_convection": "explicit", "convection_passage": "a#1",
+         "author_label": "", "processes": [
+             {"process": "deep convection", "state": "explicit", "scheme": "", "passage": "a#1"},
+             {"process": "turbulence", "state": "parametrized", "scheme": "Smagorinsky-Lilly", "passage": "a#2"},
+             {"process": "shallow convection", "state": "partly", "scheme": "", "passage": ""}]}],
+        "definitions": [{"term": "grey zone", "meaning": "m", "grid_spacing": "100 m", "process": "turbulence",
+                         "passage": "a#3"}]}}]
+    (tmp_path / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (tmp_path / "run.json").write_text('{"prompt_version": 3}')
+    reg = modelreg.build(tmp_path)
+    assert [x["process"] for x in reg["cases"][0]["processes"]] == ["deep convection", "turbulence"]   # stated only
+    assert reg["definitions"][0]["process"] == "turbulence"
+    assert "processes" in modelreg.schema(["a#1"])["properties"]["models"]["items"]["required"]
+    turb = {**reg, "classes": [{"id": "grey_zone_turbulence", "process": "turbulence", "terms": ["grey zone"],
+                                "deep_convection": "either", "span_m": [50.0, 500.0]}]}
+    assert modelreg.explicit_class(turb, "a grey zone run", 100.0) == "explicit_model"   # another process's sense
