@@ -509,9 +509,9 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
     "runs_missed": {"type": "array", "items": {"type": "string"}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 6}   # mentions 4: grades the experiments table (v4) too;
+JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 7}   # mentions 4: grades the experiments table (v4) too;
 # 5: evidence rule 2 (coarser than 10 km and not stated -> parametrized; idealized_model); 6: grades cites
-JUDGE_EVIDENCE_RULE = {4: 1, 5: 2, 6: 2}   # the evidence rule each mentions judge version labels by (older: 1)
+JUDGE_EVIDENCE_RULE = {4: 1, 5: 2, 6: 2, 7: 3}   # the evidence rule each mentions judge version labels by (older: 1)
 
 
 def _mention_line(n, m, runs=None) -> str:
@@ -577,14 +577,14 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "it to other work, usually with a citation, or states it as known background); assumed (a "
                 "premise or method choice taken as given); speculation (offered without support here). The paper's "
                 "own result compared with cited work is shown.\n"
-                "   evidence_type: observations; reanalysis; les, cpm or parametrized_model for a model run (a "
-                "deep-convection scheme makes it parametrized_model at any grid spacing; a run coarser than "
-                "10 km whose scheme isn't stated is parametrized_model too, unless the paper says convection "
-                "is explicit; otherwise, with convection explicit, les if the grid spacing is 500 m or less, "
-                "cpm if more); idealized_model for a simplified dynamical model (quasi-geostrophic, "
-                "shallow-water, dry or two-layer, conceptual); theory; mixed; unknown (the paper doesn't "
-                "say, a machine-learning model, or a run at 10 km or finer whose scheme isn't stated, or "
-                "whose grid spacing isn't stated).\n"
+                "   evidence_type, from what THIS paper states (not from what you know about a model): "
+                "observations; reanalysis; parametrized_model (the paper says a deep-convection scheme is "
+                "used); les or cpm (the paper says deep convection is explicit and calls the run a large-eddy "
+                "simulation, or convection-permitting, cloud-resolving or storm-resolving, or classes it so by "
+                "its own definition); explicit_model (explicit, but the paper doesn't class it); "
+                "idealized_model for a simplified dynamical model (quasi-geostrophic, shallow-water, dry or "
+                "two-layer, conceptual); theory; mixed; unknown (the paper doesn't say whether deep convection "
+                "is parametrized, or a machine-learning model).\n"
                 "   hedging: strong (shows, demonstrates); moderate (suggests, indicates, likely); weak (may, "
                 "could, possibly): how firmly the paper states it.\n"
                 "   standalone: is the statement understandable without the paper?\n"
