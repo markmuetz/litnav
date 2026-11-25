@@ -304,7 +304,8 @@ def t1_summary(rd: Path) -> dict:
         for v in r["output"].get("values") or []:
             filled.setdefault(v["field"], set()).add(r["id"])
             total += 1
-            bad += v.get("passage", "") not in ids.get(r["id"], set())
+            v["passage"] = v.get("passage", "").strip().strip("[]").strip()     # Haiku copies the brackets
+            bad += v["passage"] not in ids.get(r["id"], set())
     tpl = json.loads(_drafts(rd)[-1].read_text())["template"]["fields"]
     s = {"papers": len(ok), "failed": len(res) - len(ok), "reporting_topic": len(rep),
          "experiments": sum(len(r["output"].get("experiments") or []) for r in rep),

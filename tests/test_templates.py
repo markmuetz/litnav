@@ -52,7 +52,7 @@ def test_route_inventory_tally_and_t1(ilib, tmp_path):
     pid = j["ids"][0]
     (out / "results.jsonl").write_text(json.dumps({"id": j["id"], "ok": True, "output": {
         "reports_topic": True, "experiments": ["CTL"], "other": "", "values": [
-            {"experiment": "CTL", "field": "tb_threshold", "value": "241 K", "passage": pid},
+            {"experiment": "CTL", "field": "tb_threshold", "value": "241 K", "passage": f"[{pid}]"},
             {"experiment": "", "field": "dataset", "value": "GPM", "passage": "made-up"}]}}) + "\n")
     s = T.t1_summary(rd)
     assert s["values"] == 2 and s["passages_not_in_paper"] == 1 and s["papers_stating"]["tb_threshold"] == 1
