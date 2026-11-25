@@ -48,6 +48,9 @@ COPY_WORDS = 12                  # the copy check: a run this long from the pape
 FABLE = "claude-fable-5-2"
 OPUS = "claude-opus-5-5"
 GEMINI = "gemini-4-neon-high"
+# Roles (Mark, 25 Nov 2026, to save tokens): Opus drafts and revises; Fable and Gemini review.
+DRAFTER = OPUS
+REVIEWERS = ("fable", "gemini")
 
 CORE = """\
 The claim graph is built on a fixed core, the same in any field of science. It is epistemology: how
@@ -674,7 +677,7 @@ def _gemini(system: str, prompt: str, schema: dict, model: str = GEMINI, timeout
     return out
 
 
-def synthesize(lib, rd: Path, *, model: str = FABLE, n_open: int = 10, open_chars: int = 30_000) -> dict:
+def synthesize(lib, rd: Path, *, model: str = DRAFTER, n_open: int = 10, open_chars: int = 30_000) -> dict:
     prompt = _prompt(rd, lib, n_open=n_open, open_chars=open_chars)
     (rd / "synthesis.prompt.md").write_text(prompt, encoding="utf-8")
     out = _claude(model, SYNTH_SYSTEM, prompt, SCHEMA_OUT)
@@ -714,19 +717,19 @@ def drafts(rd: Path) -> list[Path]:
     return sorted(rd.glob("draft-*.json"), key=lambda p: int(p.stem.split("-")[1]))
 
 
-def review(lib, rd: Path, *, who=("opus", "gemini")) -> dict:
+def review(lib, rd: Path, *, who=REVIEWERS) -> dict:
     d = drafts(rd)[-1]
     draft = json.loads(d.read_text())["schema"]
     prompt = _prompt(rd, lib, extra="# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False))
     out = {}
     for w in who:          # inventories and tallies may go to Claude and Gemini alike (Mark, 25 Nov 2026)
-        out[w] = (_claude(OPUS, REVIEW_SYSTEM, prompt, REVIEW_SCHEMA) if w == "opus"
-                  else _gemini(REVIEW_SYSTEM, prompt, REVIEW_SCHEMA))
+        out[w] = (_gemini(REVIEW_SYSTEM, prompt, REVIEW_SCHEMA) if w == "gemini"
+                  else _claude({"opus": OPUS, "fable": FABLE}[w], REVIEW_SYSTEM, prompt, REVIEW_SCHEMA))
     (rd / f"review-{d.stem}.json").write_text(json.dumps(out, indent=1, ensure_ascii=False))
     return out
 
 
-def revise(lib, rd: Path, *, model: str = FABLE) -> dict:
+def revise(lib, rd: Path, *, model: str = DRAFTER) -> dict:
     d = drafts(rd)[-1]
     rv = rd / f"review-{d.stem}.json"
     if not rv.is_file():

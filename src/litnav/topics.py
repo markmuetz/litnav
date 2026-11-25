@@ -174,7 +174,7 @@ NAME_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["to
                               "clusters": {"type": "array", "items": {"type": "string"}}}}}}}
 
 
-def name(rd: Path, *, model: str = "claude-fable-5-2") -> dict:
+def name(rd: Path, *, model: str = "claude-opus-5-5") -> dict:
     """topics.json: the clusters named and merged by a strong model; each topic's papers are the union of
     its clusters' papers (so the ranking is by papers, computed by code)."""
     from .g0 import _claude
