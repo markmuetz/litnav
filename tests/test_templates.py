@@ -48,5 +48,12 @@ def test_route_inventory_tally_and_t1(ilib, tmp_path):
     out = T.t1_jobs(lib, rd)
     j = json.loads((out / "jobs.jsonl").read_text().splitlines()[0])
     sch = j["schema"]["properties"]
-    assert "tb_threshold" in sch["experiments"]["items"]["properties"] and "dataset" in sch["paper"]["properties"]
+    assert sch["values"]["items"]["properties"]["field"]["enum"] == ["tb_threshold", "dataset"]
+    pid = j["ids"][0]
+    (out / "results.jsonl").write_text(json.dumps({"id": j["id"], "ok": True, "output": {
+        "reports_topic": True, "experiments": ["CTL"], "other": "", "values": [
+            {"experiment": "CTL", "field": "tb_threshold", "value": "241 K", "passage": pid},
+            {"experiment": "", "field": "dataset", "value": "GPM", "passage": "made-up"}]}}) + "\n")
+    s = T.t1_summary(rd)
+    assert s["values"] == 2 and s["passages_not_in_paper"] == 1 and s["papers_stating"]["tb_threshold"] == 1
     assert lib.get(j["key"]).allowed(S.SEND_OUT)

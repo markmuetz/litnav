@@ -242,28 +242,28 @@ def revise(rd: Path) -> dict:
 
 # ---- T1: fill the template
 
-T1_SYSTEM = """You fill an extraction template for one topic from one scientific paper. For each field, give the
-value as the paper states it (as written; for a closed list, one of the allowed values) and the id of the
-passage it comes from (the id in square brackets before it, exactly); give "not_stated" if the paper does not state it (do not guess or infer). Fields that
-apply to experiments are filled once per experiment the paper describes for this topic, each named as the
-paper names it. Say first whether the paper reports this topic at all. Reply with JSON only."""
+T1_SYSTEM = """You fill an extraction template for one topic from one scientific paper. Say first whether the paper
+reports this topic at all, and list the experiments it describes for this topic, each named as the paper names
+it. Then give one entry in values for each field the paper states: experiment (the experiment's name, or "" for
+a field that applies to the paper), field, value (as the paper states it; for a closed list, one of the allowed
+values) and passage (the id in square brackets before the passage it comes from, exactly). Leave out fields the
+paper does not state: do not guess or infer. Reply with JSON only."""
 
 
-def t1_schema(template: dict, ids: list[str]) -> dict:
-    pid = {"type": "string"}     # not an enum of ids: with ~20 fields that grammar is too large for the API
-                                 # (25 Nov 2026); t1_summary checks each passage against the paper's ids
-    val = lambda: {"type": "object", "additionalProperties": False, "required": ["value", "passage"],
-                   "properties": {"value": {"type": "string"}, "passage": pid}}
-    pf = [f["name"] for f in template["fields"] if f["applies_to"] == "paper"]
-    ef = [f["name"] for f in template["fields"] if f["applies_to"] == "experiment"]
-    return {"type": "object", "additionalProperties": False, "required": ["reports_topic", "paper", "experiments", "other"],
+def t1_schema(template: dict, ids: list[str] | None = None) -> dict:
+    """Long format: one entry per stated value (experiment, field, value, passage). A field per property
+    (41 required objects) compiled to a grammar too large for the API (25 Nov 2026); fields not stated are
+    simply absent. Passages are checked against the paper's ids by code (t1_summary)."""
+    names = [f["name"] for f in template["fields"]]
+    return {"type": "object", "additionalProperties": False, "required": ["reports_topic", "experiments", "values", "other"],
             "properties": {
                 "reports_topic": {"type": "boolean"},
-                "paper": {"type": "object", "additionalProperties": False, "required": pf,
-                          "properties": {n: val() for n in pf}},
-                "experiments": {"type": "array", "items": {
-                    "type": "object", "additionalProperties": False, "required": ["name"] + ef,
-                    "properties": {"name": {"type": "string"}, **{n: val() for n in ef}}}},
+                "experiments": {"type": "array", "items": {"type": "string"}},
+                "values": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["experiment", "field", "value", "passage"],
+                    "properties": {"experiment": {"type": "string"}, "field": {"type": "string", "enum": names},
+                                   "value": {"type": "string"}, "passage": {"type": "string"}}}},
                 "other": {"type": "string"}}}
 
 
@@ -292,32 +292,24 @@ def t1_jobs(lib, rd: Path, *, keys: list[str] | None = None) -> Path:
 
 
 def t1_summary(rd: Path) -> dict:
-    """How often each field is filled (not not_stated) across the papers that report the topic."""
+    """How many papers state each field (at least one value), and how many values cite a passage that is not
+    one of the paper's ids."""
     res = [json.loads(l) for l in (rd / "t1" / "results.jsonl").read_text().splitlines() if l.strip()]
     ids = {j["id"]: set(j.get("ids") or []) for j in map(json.loads, (rd / "t1" / "jobs.jsonl").read_text().splitlines())}
-    ok = [r["output"] for r in res if r.get("ok")]
-    bad = total = 0
-    for r in res:
-        if not r.get("ok"):
-            continue
-        o = r["output"]
-        vals = list((o.get("paper") or {}).values()) + [v for e in o.get("experiments") or [] for v in e.values()
-                                                       if isinstance(v, dict)]
-        for v in vals:
-            if v.get("value", "not_stated") != "not_stated":
-                total += 1
-                bad += bool(v.get("passage")) and v["passage"] not in ids.get(r["id"], set())
-    rep = [o for o in ok if o.get("reports_topic")]
-    filled: dict[str, int] = {}
-    for o in rep:
-        for n, v in (o.get("paper") or {}).items():
-            filled[n] = filled.get(n, 0) + (v.get("value", "not_stated") != "not_stated")
-        for e in o.get("experiments") or []:
-            for n, v in e.items():
-                if isinstance(v, dict):
-                    filled[n] = filled.get(n, 0) + (v.get("value", "not_stated") != "not_stated")
-    s = {"papers": len(ok), "reporting_topic": len(rep),
-         "experiments": sum(len(o.get("experiments") or []) for o in rep),
-         "values": total, "passages_not_in_paper": bad, "filled": dict(sorted(filled.items(), key=lambda x: -x[1]))}
+    ok = [r for r in res if r.get("ok")]
+    rep = [r for r in ok if r["output"].get("reports_topic")]
+    filled: dict[str, set] = {}
+    total = bad = 0
+    for r in rep:
+        for v in r["output"].get("values") or []:
+            filled.setdefault(v["field"], set()).add(r["id"])
+            total += 1
+            bad += v.get("passage", "") not in ids.get(r["id"], set())
+    tpl = json.loads(_drafts(rd)[-1].read_text())["template"]["fields"]
+    s = {"papers": len(ok), "failed": len(res) - len(ok), "reporting_topic": len(rep),
+         "experiments": sum(len(r["output"].get("experiments") or []) for r in rep),
+         "values": total, "passages_not_in_paper": bad,
+         "papers_stating": {f["name"]: len(filled.get(f["name"], ())) for f in
+                            sorted(tpl, key=lambda f: -len(filled.get(f["name"], ())))}}
     (rd / "t1" / "summary.json").write_text(json.dumps(s, indent=1))
     return s
