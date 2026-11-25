@@ -59,6 +59,21 @@ def add(sub):
                    "(after `queue pull`), not to [local_model]")
     p.set_defaults(func=cmd_paper_eval)
 
+    p = sub.add_parser("g0", help="G0: induce the domain schema from the papers, blind (survey, inventories, "
+                       "tally, then Fable drafts and Opus and Gemini review): sample, push, status, tally, "
+                       "synthesize, review, revise")
+    p.add_argument("action", choices=["sample", "push", "status", "tally", "synthesize", "review", "revise"])
+    p.add_argument("--run-dir", help="the run folder (default: the newest under derived/g0)")
+    p.add_argument("-n", type=int, default=100, help="sample: papers to inventory")
+    p.add_argument("--clusters", type=int, default=12, help="sample: embedding clusters to stratify by")
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--label", default="", help="sample: a label for the run folder")
+    p.add_argument("--open", type=int, default=10, help="synthesize: open papers whose text Fable reads")
+    p.add_argument("--open-chars", type=int, default=30_000, help="synthesize: characters of each")
+    p.add_argument("--model", help="synthesize/revise: the drafting model (default Fable)")
+    p.add_argument("--no-submit", action="store_true")
+    p.set_defaults(func=cmd_g0)
+
     p = sub.add_parser("evals", help="every recorded eval run (eval/runs.jsonl): task, model, judge, scores")
     p.add_argument("--task")
     p.set_defaults(func=cmd_evals)
@@ -445,3 +460,34 @@ def cmd_evals(a):
         j = (r.get("judge") or {}).get("model", "")
         print(f"{r['date']} {r['task']:8s} {str(r['model'])[:34]:34s} {q:7s} {where[:22]:22s} {sc}"
               + (f"  (judge {j})" if j else ""))
+
+
+def cmd_g0(a):
+    from .. import g0
+    lib = Library.find(a.library)
+    if a.action == "sample":
+        rd = g0.sample(lib, a.n, k=a.clusters, seed=a.seed, label=a.label)
+        print(json.dumps(json.loads((rd / "run.json").read_text())["sample"]))
+        print(f"run folder {rd}; next: litnav g0 push")
+        return 0
+    rd = Path(a.run_dir) if a.run_dir else g0.latest(lib)
+    if a.action == "push":
+        r = g0.push(lib, rd, submit=not a.no_submit)
+        print(f"pushed {r['jobs']} job(s) as batch {r['batch']}; `litnav queue pull` brings them back")
+    elif a.action == "status":
+        print(json.dumps(g0.status(rd), indent=1))
+    elif a.action == "tally":
+        b = g0.tally(lib, rd)
+        print(f"{b['papers_surveyed']} surveyed, {b['papers_inventoried']} inventoried, "
+              f"{b['copied_strings_removed']} copied string(s) removed; {rd / 'bundle.json'}")
+    elif a.action == "synthesize":
+        g0.synthesize(lib, rd, model=a.model or g0.FABLE, n_open=a.open, open_chars=a.open_chars)
+        print(f"draft written: {g0.drafts(rd)[-1]}")
+    elif a.action == "review":
+        r = g0.review(lib, rd)
+        for w, v in r.items():
+            print(f"{w}: {v['verdict']}, {len(v['issues'])} issue(s)")
+    elif a.action == "revise":
+        g0.revise(lib, rd, model=a.model or g0.FABLE)
+        print(f"draft written: {g0.drafts(rd)[-1]}")
+    return 0

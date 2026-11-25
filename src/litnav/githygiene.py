@@ -30,7 +30,7 @@ END = "# <<< litnav"
 TEXT_RULES = ["papers/*/text.txt"]
 ALWAYS_RULES = ["notes/figs/*_fig*",          # figure crops from papers
                 # model jobs and replies: they hold paper text and quotes
-                "derived/batches/", "derived/model-eval/", "derived/paper-eval/",
+                "derived/batches/", "derived/model-eval/", "derived/paper-eval/", "derived/g0/",
                 "derived/verify.jsonl", "derived/ask-local.jsonl"]
 HOOK_MARK = "# litnav git-check"
 
