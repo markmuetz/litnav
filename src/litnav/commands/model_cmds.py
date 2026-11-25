@@ -95,6 +95,11 @@ def add(sub):
     p.add_argument("--label", default="")
     p.set_defaults(func=cmd_topics)
 
+    p = sub.add_parser("saturation", help="is an induction sample big enough? kinds seen vs papers inventoried "
+                       "(a G0 or template run folder; code only)")
+    p.add_argument("run_dir")
+    p.set_defaults(func=cmd_saturation)
+
     p = sub.add_parser("template", help="topic passes: route (from a topics run), inventory (jobs; then "
                        "claude-run), tally, draft, review, revise (T0); t1 (jobs; then claude-run RUN/t1), t1-summary")
     p.add_argument("action", choices=["route", "inventory", "tally", "draft", "review", "revise", "t1", "t1-summary",
@@ -622,4 +627,16 @@ def cmd_template(a):
         print(f"{len(s['papers'])} papers, {s['values']} values: {s['verdicts']}; missed {s['missed']}")
     else:
         print(json.dumps(T.t1_summary(rd), indent=1))
+    return 0
+
+
+def cmd_saturation(a):
+    from .. import saturation as SAT
+    out = SAT.run(Library.find(a.library), Path(a.run_dir))
+    for name, by in out["items"].items():
+        for agree, c in by.items():
+            marks = [x for x in c["recurring_curve"] if x["n"] in (5, 10, 20, 40, 80, c["papers"])]
+            print(f"{name} (agree {agree}): {c['papers']} papers, {c['kinds']} kinds ({c['recurring']} recurring); "
+                  f"recurring seen at n=" + ", ".join(f"{x['n']}: {x['mean']:g}" for x in marks)
+                  + f"; new recurring kinds per paper over the last fifth: {c['new_recurring_per_paper_last_fifth']}")
     return 0
