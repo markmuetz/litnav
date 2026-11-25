@@ -443,8 +443,8 @@ def tally(lib, rd: Path, *, top: int = 80) -> dict:
               **tallies(sv, clean, top)}
     (rd / "bundle.json").write_text(json.dumps(bundle, indent=1, ensure_ascii=False))
     _write_jsonl(rd / "inventories.clean.jsonl", [{"key": k, **v} for k, v in sorted(clean.items())])
-    # Gemini's view (Mark's ruling of 25 Nov covers Claude only): survey tags from public abstracts,
-    # inventory counts from open papers only
+    # an open-only view (survey tags from public abstracts, inventory counts from open papers), kept for
+    # anyone who may not see licensed papers' inventories
     opens = {r["key"] for r in _jsonl(rd / "sample.jsonl") if r.get("open")}
     gem = {"run": rd.name, "note": "survey tags from public abstracts only; inventory counts from the open papers "
                                    "in the sample only",
@@ -466,8 +466,8 @@ def _strip_passages(o):
 
 def evidence_text(rd: Path, *, max_chars: int = 400_000, open_only: bool = False) -> str:
     """The bundle and the cleaned inventories, without passage ids, keyed by an anonymous number.
-    open_only: inventories of open papers only (for Gemini: Mark's ruling of 25 Nov 2026 lets
-    inventories of licensed papers go to Claude, like summaries; Gemini is not covered)."""
+    open_only: inventories of open papers only (and bundle.open.json). Not used by default: Mark ruled
+    on 25 Nov 2026 that inventories and tallies may go to Claude and Gemini, like summaries."""
     b = json.loads((rd / ("bundle.open.json" if open_only else "bundle.json")).read_text())
     inv = _jsonl(rd / "inventories.clean.jsonl")
     if open_only:
@@ -651,13 +651,11 @@ def drafts(rd: Path) -> list[Path]:
 def review(lib, rd: Path, *, who=("opus", "gemini")) -> dict:
     d = drafts(rd)[-1]
     draft = json.loads(d.read_text())["schema"]
-    extra = "# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False)
+    prompt = _prompt(rd, extra="# The draft to review\n" + json.dumps(draft, indent=1, ensure_ascii=False))
     out = {}
-    for w in who:
-        out[w] = (_claude(OPUS, REVIEW_SYSTEM, _prompt(rd, extra=extra), REVIEW_SCHEMA) if w == "opus"
-                  else _gemini(REVIEW_SYSTEM, _prompt(rd, extra=extra + "\n\n(The inventories above are those of "
-                                                      "the open-access papers in the sample only.)", open_only=True),
-                               REVIEW_SCHEMA))
+    for w in who:          # inventories and tallies may go to Claude and Gemini alike (Mark, 25 Nov 2026)
+        out[w] = (_claude(OPUS, REVIEW_SYSTEM, prompt, REVIEW_SCHEMA) if w == "opus"
+                  else _gemini(REVIEW_SYSTEM, prompt, REVIEW_SCHEMA))
     (rd / f"review-{d.stem}.json").write_text(json.dumps(out, indent=1, ensure_ascii=False))
     return out
 
