@@ -291,7 +291,7 @@ def t1_jobs(lib, rd: Path, *, keys: list[str] | None = None) -> Path:
     return out
 
 
-_PID = re.compile(r"[A-Za-z0-9_.-]+#[a-z]+#[0-9a-f]{6,}")
+_PID = re.compile(r"[^#\s\[\],;]+#[^#\s\[\],;]+#[0-9a-f]{6,}")
 
 
 def t1_summary(rd: Path) -> dict:
