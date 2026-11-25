@@ -13,7 +13,7 @@ Every call also sees the title and abstract, for context.
 
 This prompt is the production one (`litnav claims extract`) and the one
 `litnav paper-eval --task mentions` measures, so the eval measures what runs.
-Model evidence is classified by code, not by the model (EVIDENCE_RULE): the
+Model evidence is classified by code, not by the model (EVIDENCE_METHOD): the
 model records whether deep convection is parametrized, the grid spacing and
 the paper's own name for the run, so the thresholds can change without
 re-extraction. The hedging levels are v0: not yet settled.
@@ -27,18 +27,16 @@ import secrets
 PROMPT_VERSION = 7              # v4: an experiments table per paper; v5: a sharper "shown", shown model claims
 SCHEMA_VERSION = "0.6"          # name their entry; v6: cites; v7: the table is lean (anchors only: framework v2,
                                 # scheme detail moves to the model-configuration topic pass)
-EVIDENCE_RULE = 3               # evidence_type() below; rule 1 Mark 23 Nov 2026, rule 2 Mark 25 Nov 2026,
-                                # rule 3 Mark 25 Nov 2026: drawn from the literature, no thresholds of ours
-LES_MAX_M = 500                 # RETIRED with rule 3 (kept to reproduce rule 1 and 2 labels in old reports)
-PARAM_MIN_M = 10_000            # RETIRED with rule 3 (rule 2's inference)
+EVIDENCE_METHOD = "literature-1"  # evidence_type() below (Mark, 25 Nov 2026: rules are drawn from the literature).
+                                 # Replaces rules 1 and 2 (23 and 25 Nov), whose 500 m and 10 km cut-offs are gone
 MAX_ITEMS = 40                  # mentions a call; report counts calls that hit it
 GROUP_CHARS = 20_000            # passages per call: fits a 32k-token context with room to think
 SKIP_KINDS = {"ack", "front"}   # not claims; the title and abstract go to every call anyway
 
 CLAIM_TYPES = ["shown", "restated", "assumed", "speculation"]
 EVIDENCE_KINDS = ["observations", "reanalysis", "model", "theory", "mixed", "unknown"]     # what the model labels
-EVIDENCE_TYPES = ["observations", "reanalysis", "les", "cpm", "explicit_model", "parametrized_model",
-                  "idealized_model", "theory", "mixed", "unknown"]                                                   # the record's, by rule
+EVIDENCE_TYPES = ["observations", "reanalysis", "explicit_model", "parametrized_model", "idealized_model", "theory",
+                  "mixed", "unknown"]   # explicit runs may instead carry a class from the induced vocabulary                                                   # the record's, by rule
 YNU = ["yes", "no", "unknown"]
 HEDGING = ["strong", "moderate", "weak"]
 SOURCES = ["text", "figure", "table"]
@@ -365,7 +363,7 @@ def records(key: str, replies: list[dict], chunk_info: dict, *, run: str = "",
                 "chunk": m.get("chunk"), "section": ci.get("section_title"), "page": ci.get("page"),
                 "statement": m.get("statement", ""), "source": m.get("source"),
                 "claim_type": m.get("claim_type"), "evidence_type": evidence_type(m, runs),
-                "evidence_rule": EVIDENCE_RULE, "evidence_inferred": evidence_inferred(m, runs),
+                "evidence_method": EVIDENCE_METHOD, "evidence_basis": evidence_basis(m, runs)["basis"],
                 "evidence": m.get("evidence"),
                 "experiment_name": entry_name(find_run(runs, mention_experiment(m)) or {}),
                 "cites": m.get("cites", ""),       # as written; resolving to reference keys is later work
@@ -389,7 +387,7 @@ def grounded(quote: str, chunk_text: str) -> bool:
     return bool(q) and q in norm(chunk_text)
 
 
-# ---- evidence type, by rule (EVIDENCE_RULE; the thresholds live here, not in the prompt)
+# ---- evidence type, drawn from the literature (EVIDENCE_METHOD; no thresholds of ours)
 
 _UNITS = {"m": 1.0, "metres": 1.0, "meters": 1.0, "km": 1000.0, "kilometres": 1000.0, "kilometers": 1000.0,
           "deg": 111_000.0, "degree": 111_000.0, "degrees": 111_000.0, "°": 111_000.0,
@@ -413,23 +411,14 @@ def grid_spacing_m(text: str | None) -> float | None:
     return min(xs) if xs else None
 
 
-def _model_class(param: str | None, dx: float | None, rule: int = EVIDENCE_RULE, label: str = "",
-                 reg: dict | None = None) -> str:
-    if rule >= 3:                           # rule 3: what the papers state; no grid-spacing thresholds
-        from .modelreg import explicit_class
-        if param == "yes":
-            return "parametrized_model"
-        if param == "no":
-            return explicit_class(reg, label, dx)
-        return "unknown"
+def _model_class(param: str | None, dx: float | None, label: str = "", reg: dict | None = None) -> str:
+    """A stated scheme: parametrized_model. Stated explicit convection: the class the authors' label or the
+    literature's induced vocabulary gives (modelreg.explicit_class), else explicit_model. Otherwise unknown."""
+    from .modelreg import explicit_class
     if param == "yes":
         return "parametrized_model"
     if param == "no":
-        if dx is None:
-            return "unknown"
-        return "les" if dx <= LES_MAX_M else "cpm"
-    if rule >= 2 and dx is not None and dx > PARAM_MIN_M:
-        return "parametrized_model"         # rule 2: not stated, coarser than 10 km (Mark, 25 Nov 2026)
+        return explicit_class(reg, label, dx)
     return "unknown"
 
 
@@ -442,39 +431,34 @@ def run_facts(run: dict) -> dict:
             "family": run.get("family", "unknown")}
 
 
-def evidence_type(m: dict, runs: list[dict] | None = None, rule: int = EVIDENCE_RULE, *,
-                  reg: dict | None = None, key: str = "") -> str:
-    """With an experiments table (v4), a mention naming a model run takes that
-    run's facts. A machine-learning model has no class (unknown); an idealized
-    one (quasi-geostrophic, shallow-water, dry...) is idealized_model (rule 2).
-    Rule 3 (Mark, 25 Nov 2026: rules are drawn from the literature): a stated
-    scheme gives parametrized_model; stated explicit convection gives les, cpm
-    or explicit_model from the authors' own label or the literature's
-    definitions (modelreg.explicit_class). Unstated, it takes what the paper's
-    own registry entry states, else what other papers state for the same
-    configuration (modelreg.lookup: only where they agree), else unknown. A
-    result the paper shows with no run named takes its runs' class if they
-    all share one. reg: a model registry (registry.json); key: the paper."""
-    return _evidence(m, runs, rule, reg, key)[0]
+def evidence_type(m: dict, runs: list[dict] | None = None, *, reg: dict | None = None, key: str = "") -> str:
+    """A mention's evidence type, drawn from the literature (EVIDENCE_METHOD; Mark, 25 Nov 2026). A mention
+    naming a model run takes that run's facts: a machine-learning model has no class (unknown), an
+    idealized one is idealized_model. A stated deep-convection scheme gives parametrized_model; stated
+    explicit convection gives the class from the authors' label or the induced vocabulary, else
+    explicit_model. Unstated: the paper's own registry entry, else what other papers state for the same
+    configuration (modelreg.lookup, by bracketing), else unknown. A result the paper shows with no run
+    named takes its runs' class if they all share one. reg: the model registry; key: the paper."""
+    return _evidence(m, runs, reg, key)[0]
 
 
 def evidence_basis(m: dict, runs: list[dict] | None = None, *, reg: dict | None = None, key: str = "") -> dict:
-    """How the label was reached (rule 3): {basis: stated | own_registry | literature | single_run | none,
-    sources: [paper keys]}."""
-    _, basis, src = _evidence(m, runs, EVIDENCE_RULE, reg, key)
-    return {"basis": basis, "sources": src}
+    """How the label was reached: {basis: stated | own_registry | literature | disputed | single_run |
+    none, sources: [paper keys], split: {parametrized: n, explicit: n} where the literature was asked}."""
+    _, basis, src, split = _evidence(m, runs, reg, key)
+    return {"basis": basis, "sources": src, **({"split": split} if split else {})}
 
 
-def _run_class(r: dict, rule: int, reg, key) -> tuple[str, str, list]:
+def _run_class(r: dict, reg, key) -> tuple[str, str, list, dict]:
     f = run_facts(r)
     if f["family"] == "machine_learning":
-        return "unknown", "stated", []
+        return "unknown", "stated", [], {}
     if f["family"] == "idealized":
-        return ("idealized_model" if rule >= 2 else "unknown"), "stated", []
-    param, basis, src = f["deep_convection_parametrized"], "stated", []
+        return "idealized_model", "stated", [], {}
+    param, basis, src, split = f["deep_convection_parametrized"], "stated", [], {}
     text = " ".join(str(r.get(k, "")) for k in ("model", "configuration", "name"))
     label = text
-    if rule >= 3 and reg is not None:
+    if reg is not None:
         from .modelreg import _tokens, lookup
         own = [c for c in reg.get("cases", []) if c["key"] == key and _tokens(c["name"] + " " + c["configuration"])
                & _tokens(text)]
@@ -486,57 +470,40 @@ def _run_class(r: dict, rule: int, reg, key) -> tuple[str, str, list]:
             else:
                 hit = lookup(reg, text, f["resolution"], exclude=key)
                 if hit:
-                    param, basis, src = ({"parametrized": "yes", "explicit": "no"}[hit["treatment"]], "literature",
-                                         hit["keys"])
-    if param == "unknown" and rule >= 3:
-        return "unknown", "none", []
+                    split = hit["split"]
+                    if hit["treatment"]:
+                        param, basis, src = ({"parametrized": "yes", "explicit": "no"}[hit["treatment"]],
+                                             "literature", hit["keys"])
+                    else:
+                        basis, src = "disputed", hit["keys"]
+    if param == "unknown":
+        return "unknown", (basis if basis == "disputed" else "none"), src, split
     dxs = grid_spacings_m(f["resolution"])
-    cs = {_model_class(param, dx, rule, label, reg) for dx in dxs} or {_model_class(param, None, rule, label, reg)}
-    return (cs.pop() if len(cs) == 1 else "mixed"), basis, src
+    cs = {_model_class(param, dx, label, reg) for dx in dxs} or {_model_class(param, None, label, reg)}
+    return (cs.pop() if len(cs) == 1 else "mixed"), basis, src, split
 
 
-def _evidence(m, runs, rule, reg, key) -> tuple[str, str, list]:
+def _evidence(m, runs, reg, key) -> tuple[str, str, list, dict]:
     if m.get("evidence") == "model" and runs is not None:
         r = find_run(runs, mention_experiment(m))
         if r and r.get("kind", "model_run") == "model_run":
-            if rule < 3:
-                f = run_facts(r)
-                if f["family"] == "machine_learning":
-                    return "unknown", "stated", []
-                if f["family"] == "idealized":
-                    return ("idealized_model" if rule >= 2 else "unknown"), "stated", []
-                return _evidence_type_v3({**m, "experiment": f}, rule), "stated", []
-            return _run_class(r, rule, reg, key)
-        if r is None and rule >= 3 and m.get("claim_type") == "shown":
-            got = [_run_class(x, rule, reg, key) for x in runs if x.get("kind", "model_run") == "model_run"]
+            return _run_class(r, reg, key)
+        if r is None and m.get("claim_type") == "shown":
+            got = [_run_class(x, reg, key) for x in runs if x.get("kind", "model_run") == "model_run"]
             cls = {g[0] for g in got} - {"unknown"}
             if len(cls) == 1:
-                return cls.pop(), "single_run", sorted({k for g in got for k in g[2]})
-    e = _evidence_type_v3(m, rule)
-    return e, ("stated" if e != "unknown" else "none"), []
+                return cls.pop(), "single_run", sorted({k for g in got for k in g[2]}), {}
+    e = _evidence_type_v3(m)
+    return e, ("stated" if e != "unknown" else "none"), [], {}
 
 
 def evidence_inferred(m: dict, runs: list[dict] | None = None, *, reg: dict | None = None, key: str = "") -> bool:
-    """The class does not come from this paper's own statement about the run (rule 2: inferred from grid
-    spacing; rule 3: from the registry or the paper's other runs)."""
-    if EVIDENCE_RULE >= 3:
-        return evidence_basis(m, runs, reg=reg, key=key)["basis"] in ("literature", "single_run")
-    return evidence_type(m, runs) != evidence_type(m, runs, rule=1) and \
-        evidence_type(m, runs) in ("parametrized_model", "mixed")
+    """The class does not come from this paper's own statement about the run."""
+    return evidence_basis(m, runs, reg=reg, key=key)["basis"] in ("literature", "single_run")
 
 
-def _evidence_type_v3(m: dict, rule: int = EVIDENCE_RULE) -> str:
-    """The record's evidence type from the model's facts.
-    Rule 1 (Mark, 23 Nov 2026): a deep-convection scheme -> parametrized_model,
-    whatever the grid spacing; otherwise grid spacing <= 500 m -> les, else cpm
-    (no upper bound: grey-zone runs keep their spacing and can be filtered);
-    missing facts -> unknown. Several grid spacings that fall in different
-    classes -> mixed.
-    Rule 2 (Mark, 25 Nov 2026): as rule 1, but a run whose scheme is not stated
-    and whose grid spacing is coarser than 10 km is parametrized_model: in
-    practice such runs parametrize deep convection unless the paper says it is
-    explicit (which is 'no' here). Records mark it as inferred.
-    Rule 3: see evidence_type (no thresholds; the 500 m and 10 km cut-offs are retired)."""
+def _evidence_type_v3(m: dict) -> str:
+    """The evidence type from a v3 record's own facts (no runs table)."""
     ev = m.get("evidence")
     if ev != "model":
         return ev if ev in EVIDENCE_TYPES else "unknown"
@@ -544,7 +511,7 @@ def _evidence_type_v3(m: dict, rule: int = EVIDENCE_RULE) -> str:
     param = e.get("deep_convection_parametrized")
     dxs = grid_spacings_m(e.get("resolution"))
     label = " ".join(str(e.get(k, "")) for k in ("model", "run_name", "method"))
-    classes = {_model_class(param, dx, rule, label) for dx in dxs} or {_model_class(param, None, rule, label)}
+    classes = {_model_class(param, dx, label) for dx in dxs} or {_model_class(param, None, label)}
     return classes.pop() if len(classes) == 1 else "mixed"
 
 

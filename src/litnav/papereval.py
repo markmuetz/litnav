@@ -511,7 +511,15 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
 JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 7}   # mentions 4: grades the experiments table (v4) too;
 # 5: evidence rule 2 (coarser than 10 km and not stated -> parametrized; idealized_model); 6: grades cites
-JUDGE_EVIDENCE_RULE = {4: 1, 5: 2, 6: 2, 7: 3}   # the evidence rule each mentions judge version labels by (older: 1)
+EXPLICIT_LABELS = {"les", "cpm", "explicit_model"}     # judge v7's labels for explicit runs
+
+
+def coarse(label: str | None) -> str | None:
+    """An evidence label at the level every labeller shares: explicit_model for any explicit class (judge
+    v7's les and cpm, or a class from the induced vocabulary), else the label."""
+    if label in EXPLICIT_LABELS or (label and label not in claims.EVIDENCE_TYPES):
+        return "explicit_model"
+    return label
 
 
 def _mention_line(n, m, runs=None) -> str:
@@ -785,13 +793,11 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
                                           for o in r["parts"])
                 row["_table"] = out.get("runs") or []
                 # labelled by the rule the judge used, so the two are compared like for like
-                rule = JUDGE_EVIDENCE_RULE.get(jver.get(jid), 1) if jid in jver else claims.EVIDENCE_RULE
-                evs = [claims.evidence_type(m, out.get("runs"), rule=rule) if "evidence" in m
+                # judges before v7 labelled by the retired rules 1 and 2: their evidence labels are not compared
+                row["evidence_comparable"] = (jver.get(jid) or 0) >= 7 if jid in jver else True
+                evs = [claims.evidence_type(m, out.get("runs")) if "evidence" in m
                        else m.get("evidence_type") for m in ms]
-                row["evidence_rule"] = rule
                 row["evidence_unknown"] = sum(e == "unknown" for e in evs)
-                now = [claims.evidence_type(m, out.get("runs")) for m in ms if "evidence" in m]
-                row["evidence_unknown_now"] = sum(e == "unknown" for e in now)       # under the current rule
                 row["evidence_inferred"] = sum(claims.evidence_inferred(m, out.get("runs")) for m in ms)
                 row["model_labels"] = [{"claim_type": m.get("claim_type"), "evidence_type": e,
                                         "hedging": m.get("hedging")} for m, e in zip(ms, evs)]
@@ -828,8 +834,12 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
             if task == "mentions":
                 labels = row.get("model_labels") or []
                 for f in ("claim_type", "evidence_type", "hedging"):
+                    if f == "evidence_type" and not row.get("evidence_comparable", True):
+                        continue
                     row[f"{f}_pairs"] = [[labels[x["n"] - 1][f], x.get(f)] for x in items or []
                                          if isinstance(x.get("n"), int) and 0 < x["n"] <= len(labels)]
+                    if f == "evidence_type":            # at the level the judge can see: explicit or parametrized
+                        row[f"{f}_pairs"] = [[coarse(a), coarse(b)] for a, b in row[f"{f}_pairs"]]
                 row["standalone"] = sum(bool(x.get("standalone")) for x in items or [])
                 row["cites_ok"] = dict(Counter(x.get("cites_ok") for x in items or []
                                                if x.get("cites_ok") not in (None, "not_given")))
@@ -960,9 +970,7 @@ def summarize(task, rows) -> dict:
         s["calls"] = sum(r["calls"] for r in rows)
         s["calls_at_cap"] = sum(r.get("calls_at_cap", 0) for r in rows)
         s["evidence_unknown"] = round(sum(r.get("evidence_unknown", 0) for r in rows) / max(1, n), 3)
-        s["evidence_rule"] = sorted({r["evidence_rule"] for r in rows if "evidence_rule" in r})
-        s[f"evidence_unknown_rule{claims.EVIDENCE_RULE}"] = round(sum(r.get("evidence_unknown_now", 0) for r in rows)
-                                                              / max(1, n), 3)
+        s["evidence_method"] = claims.EVIDENCE_METHOD
         s["evidence_inferred"] = round(sum(r.get("evidence_inferred", 0) for r in rows) / max(1, n), 3)
         ev = [tuple(x) for r in j for x in r.get("evidence_type_pairs", [])]
         s["evidence_unknown_judge"] = round(sum(b == "unknown" for _, b in ev) / len(ev), 3) if ev else None

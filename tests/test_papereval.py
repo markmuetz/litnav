@@ -204,7 +204,7 @@ def test_mentions_task(ilib, tmp_path, monkeypatch):
     assert s["evidence_unknown"] == 0.0 and s["evidence_unknown_judge"] == 0.0
     out = P.paper_results(rd, "mentions")["mentions-jones2019gravity"]["output"]
     assert out["runs"][0]["name"] == "CTRL"
-    assert {C.evidence_type(m, out["runs"], rule=2) for m in out["mentions"]} == {"cpm"}   # scheme off, 1 km
+    assert {C.evidence_type(m, out["runs"]) for m in out["mentions"]} == {"explicit_model"}   # scheme off, 1 km
 
 
 def test_mention_groups_and_records():
@@ -228,7 +228,7 @@ def test_mention_groups_and_records():
     assert r["value"] == {"value": 1200.0, "as_written": "1,200", "units": "m", "low": None, "high": 1500.0}
     assert r["hedging"] == {"level": "weak", "words": "may"} and r["section"] == "Results" and r["page"] == 3
     assert r["evidence_type"] == "explicit_model" and r["experiment"]["grid_spacing_m"] == 2200.0 \
-        and r["evidence_rule"] == 3
+        and r["evidence_method"] == C.EVIDENCE_METHOD and r["evidence_basis"] == "stated"
     assert C._value({"value": "", "units": "", "low": "", "high": ""}) is None
     assert C.grounded("radiate from squall-\nlines", "Waves RADIATE   from squall-\n lines here")
     assert not C.grounded("", "anything")
@@ -243,24 +243,20 @@ def test_mention_prompt_v2_rules():
 
 
 @pytest.mark.parametrize("ev,res,param,want", [
-    ("model", "2.2 km", "yes", "parametrized_model"),      # a scheme wins at any grid spacing
+    ("model", "2.2 km", "yes", "parametrized_model"),      # a stated scheme, at any grid spacing
     ("model", "250 m", "yes", "parametrized_model"),
-    ("model", "500 m", "no", "les"),                       # <= 500 m without a scheme
-    ("model", "0.5 km", "no", "les"),
-    ("model", "1 km", "no", "cpm"),
-    ("model", "7 km", "no", "cpm"),                        # no upper bound: grey zone kept as cpm
-    ("model", "0.25 degrees", "no", "cpm"),
-    ("model", "", "no", "unknown"),                        # missing facts
+    ("model", "500 m", "no", "explicit_model"),            # no cut-offs: classed only by the literature's vocabulary
+    ("model", "7 km", "no", "explicit_model"),
+    ("model", "", "no", "explicit_model"),
     ("model", "3 km", "unknown", "unknown"),
-    ("model", "4 km and 250 m", "no", "mixed"),            # runs in different classes
-    ("model", "1-4 km", "no", "cpm"),
+    ("model", "100 km", "unknown", "unknown"),             # rule 2's inference is gone
     ("observations", "", "unknown", "observations"),
     ("bogus", "", "", "unknown"),
 ])
-def test_evidence_rule(ev, res, param, want):
+def test_evidence_from_stated_facts(ev, res, param, want):
     from litnav import claims as C
     assert C.evidence_type({"evidence": ev, "experiment": {"resolution": res,
-                                                           "deep_convection_parametrized": param}}, rule=1) == want
+                                                           "deep_convection_parametrized": param}}) == want
 
 
 def test_grid_spacing_parse():

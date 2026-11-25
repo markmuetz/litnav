@@ -79,7 +79,9 @@ def add(sub):
 
     p = sub.add_parser("model-registry", help="which models each paper runs, at what grid spacing, and what it "
                        "states about deep convection; aggregated by model family (jobs, then claude-run or push, build)")
-    p.add_argument("action", choices=["jobs", "build"])
+    p.add_argument("action", choices=["jobs", "build", "score", "classes"],
+                   help="score: leave one paper out against stated cases, by bracketing and the sensitivity "
+                        "checks; classes: induce the class vocabulary from the papers' definitions")
     p.add_argument("--run-dir")
     p.add_argument("--all", action="store_true", help="jobs: every paper the local model may read (default: open only)")
     p.add_argument("--label", default="")
@@ -532,8 +534,21 @@ def cmd_model_registry(a):
         rd = modelreg.new_run(lib, open_only=not a.all, label=a.label)
         print(f"{json.loads((rd / 'run.json').read_text())['papers']} job(s) in {rd}")
         return 0
-    reg = modelreg.build(Path(a.run_dir))
-    agreed = sum(e["verdict"] in ("parametrized", "explicit") for e in reg["entries"])
-    print(f"{reg['papers']} papers; {len(reg['entries'])} family x grid-class entries, {agreed} agreed, "
-          f"{sum(e['verdict'] == 'disputed' for e in reg['entries'])} disputed")
+    rd = Path(a.run_dir)
+    if a.action == "build":
+        reg = modelreg.build(rd)
+        print(f"{reg['papers']} papers; {len(reg['cases'])} model configurations "
+              f"({sum(c['deep_convection'] in ('parametrized', 'explicit') for c in reg['cases'])} stating their "
+              f"deep-convection treatment); {len(reg['definitions'])} definitions")
+    elif a.action == "score":
+        reg = modelreg.load(rd)
+        rows = [modelreg.score_stated(reg, m) for m in ("bracket", "exact", ("factor", 1.5), ("factor", 2.0),
+                                                        ("factor", 4.0))]
+        (rd / "score.json").write_text(json.dumps(rows, indent=1))
+        print(json.dumps(rows, indent=1))
+    else:
+        voc = modelreg.induce_classes(rd)
+        for c in voc["classes"]:
+            print(f"{c['id']}: {c['deep_convection']}; {len(c['papers'])} papers; span {c['span_m']}; "
+                  f"terms {c['terms'][:6]}")
     return 0

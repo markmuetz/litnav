@@ -109,7 +109,10 @@ def new_run(lib, *, open_only: bool = True, label: str = "") -> Path:
 
 # ---- aggregation: no thresholds of ours (Mark, 25 Nov 2026: rules are drawn from the literature)
 
-NEIGHBOUR = 2.0     # stated cases count as neighbours of a query within this factor of its grid spacing
+# How a run is matched to other papers' stated cases. "bracket" (the default) has no parameter: the nearest
+# stated case finer than the run and the nearest coarser, of the same model; the papers fix the window.
+# ("factor", f) and "exact" are kept to measure how sensitive the answers are to that choice.
+MATCH = "bracket"
 
 
 def norm_family(f: str) -> str:
@@ -152,64 +155,136 @@ def build(rd: Path) -> dict:
     return reg
 
 
-def lookup(reg: dict, model_text: str, grid: str, *, exclude: str = "") -> dict | None:
-    """What the literature states for configurations like this one: cases of the same family whose grid
-    spacing is within a factor NEIGHBOUR (any, if either is unknown), preferring those that share a
-    configuration word with the query. {treatment: parametrized|explicit, keys, n} when the stated cases
-    agree; None when there are none or they disagree. exclude: a paper to leave out (scoring)."""
+def _same_model(reg: dict, model_text: str, exclude: str) -> list[dict]:
+    """Stated cases of the run's model: the same family (whole word), narrowed to those sharing a
+    configuration word with the run when any do."""
     t = " " + re.sub(r"[^a-z0-9]+", " ", (model_text or "").lower()) + " "
-    dx = _dx(grid)
     fam = [c for c in reg["cases"] if c["deep_convection"] in ("parametrized", "explicit") and c["key"] != exclude
            and len(c["family"]) >= 2 and re.search(rf"\b{re.escape(c['family'])}(\s?\d|\b)", t)]
-    if dx is not None:
-        fam = [c for c in fam if c["dx_m"] is None or max(c["dx_m"], dx) / max(1.0, min(c["dx_m"], dx)) <= NEIGHBOUR]
-    if not fam:
-        return None
     q = _tokens(model_text) - _tokens(" ".join(c["family"] for c in fam))
     close = [c for c in fam if q & (_tokens(c["name"] + " " + c["configuration"]) - _tokens(c["family"]))]
-    for group in (close, fam):
-        ts = {c["deep_convection"] for c in group}
-        if len(ts) == 1:
-            return {"treatment": ts.pop(), "keys": sorted({c["key"] for c in group}), "n": len(group)}
-        if group:
-            return None          # the literature disagrees: no rule
-    return None
+    return close or fam
 
 
-def score_stated(reg: dict) -> dict:
+def _matched(cases: list[dict], dx: float | None, match) -> list[dict]:
+    if dx is None:
+        return cases
+    known = [c for c in cases if c["dx_m"] is not None]
+    if match == "exact":
+        return [c for c in known if abs(c["dx_m"] - dx) <= 1e-6 * dx]
+    if isinstance(match, tuple):
+        f = match[1]
+        return [c for c in known if max(c["dx_m"], dx) / max(1.0, min(c["dx_m"], dx)) <= f]
+    finer = [c["dx_m"] for c in known if c["dx_m"] <= dx]
+    coarser = [c["dx_m"] for c in known if c["dx_m"] >= dx]
+    if not finer or not coarser:
+        return []                     # outside what the papers state: no extrapolation
+    lo, hi = max(finer), min(coarser)
+    return [c for c in known if c["dx_m"] in (lo, hi)]
+
+
+def lookup(reg: dict, model_text: str, grid: str, *, exclude: str = "", match=None) -> dict | None:
+    """What the literature states for configurations like this one. Returns None when no paper states
+    anything for it, else {treatment, keys, n, split}: treatment is parametrized or explicit when the
+    matched papers agree, None when they disagree (the split says how). exclude: a paper to leave out."""
+    cases = _matched(_same_model(reg, model_text, exclude), _dx(grid), match or MATCH)
+    if not cases:
+        return None
+    split = {t: len({c["key"] for c in cases if c["deep_convection"] == t}) for t in ("parametrized", "explicit")}
+    ts = {c["deep_convection"] for c in cases}
+    return {"treatment": ts.pop() if len(ts) == 1 else None, "keys": sorted({c["key"] for c in cases}),
+            "n": len(cases), "split": split}
+
+
+def score_stated(reg: dict, match=None) -> dict:
     """Leave one paper out: for each stated case of a configuration the paper itself ran, hide it and ask
-    the rest of the registry. Coverage (how often it answers) and accuracy (how often the answer matches
-    what the paper states)."""
-    tot = answered = right = 0
+    the rest of the registry. coverage: how often it answers; accuracy: how often the answer matches what
+    the paper states; disputed: how often the other papers disagree."""
+    tot = answered = right = disputed = 0
     for c in reg["cases"]:
         if c["deep_convection"] not in ("parametrized", "explicit") or c["role"] != "run_in_this_paper":
             continue
         tot += 1
-        r = lookup(reg, f"{c['name']} {c['configuration']} {c['family']}", c["grid"], exclude=c["key"])
-        if r:
+        r = lookup(reg, f"{c['name']} {c['configuration']} {c['family']}", c["grid"], exclude=c["key"], match=match)
+        if r and r["treatment"]:
             answered += 1
             right += r["treatment"] == c["deep_convection"]
-    return {"stated_cases": tot, "answered": answered, "coverage": round(answered / max(1, tot), 3),
-            "correct": right, "accuracy": round(right / max(1, answered), 3)}
+        elif r:
+            disputed += 1
+    return {"match": str(match or MATCH), "stated_cases": tot, "answered": answered,
+            "coverage": round(answered / max(1, tot), 3), "correct": right,
+            "accuracy": round(right / max(1, answered), 3), "disputed": disputed}
+
+
+# ---- the class vocabulary, induced from the papers' own definitions
+
+CLASSES_SYSTEM = """You are given definitions of classes of numerical model, each taken from a scientific paper
+(the term as the paper writes it, what the paper says it means, any grid spacing the paper ties to it). Group
+the terms that name the same class of model, using only what the definitions say, not what you know. For each
+class give: id (a short snake_case name from the most common term), name, terms (every term in the group, as
+written), deep_convection (what the definitions say: explicit, parametrized, either, or not_said), and refs
+(the numbers of the definitions in the group). Terms that are not classes of model (a range of grid spacing,
+such as the grey zone, is fine: treat it as a class) go in no group. Reply with JSON only."""
+
+CLASSES_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["classes"], "properties": {
+    "classes": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                "required": ["id", "name", "terms", "deep_convection", "refs"],
+                "properties": {"id": {"type": "string"}, "name": {"type": "string"},
+                               "terms": {"type": "array", "items": {"type": "string"}},
+                               "deep_convection": {"type": "string",
+                                                   "enum": ["explicit", "parametrized", "either", "not_said"]},
+                               "refs": {"type": "array", "items": {"type": "integer"}}}}}}}
+
+
+def induce_classes(rd: Path, *, model: str = "claude-opus-5-5") -> dict:
+    """classes.json: the papers' terms for classes of model, grouped by a strong model from the
+    definitions alone (a proposal that cites them), with the grid spacings each class's definitions state
+    and the papers that state them."""
+    from .g0 import _claude
+    reg = json.loads((rd / "registry.json").read_text())
+    defs = reg["definitions"]
+    lines = "\n".join(f"{i}. term: {d['term']} | meaning: {d['meaning']} | grid spacing: {d.get('grid_spacing') or '-'}"
+                      for i, d in enumerate(defs, 1))
+    out = _claude(model, CLASSES_SYSTEM, f"Definitions ({len(defs)}):\n{lines}", CLASSES_SCHEMA)
+    classes = []
+    for c in out.get("classes", []):
+        refs = [defs[i - 1] for i in c.get("refs", []) if isinstance(i, int) and 0 < i <= len(defs)]
+        dxs = sorted(d["dx_m"] for d in refs if d.get("dx_m"))
+        classes.append({**c, "papers": sorted({d["key"] for d in refs}),
+                        "grid_spacings_m": dxs, "span_m": [dxs[0], dxs[-1]] if dxs else None,
+                        "sources": [{"key": d["key"], "passage": d.get("passage"), "grid_spacing": d.get("grid_spacing")}
+                                    for d in refs]})
+    voc = {"run": rd.name, "model": model, "definitions": len(defs), "classes": classes}
+    (rd / "classes.json").write_text(json.dumps(voc, ensure_ascii=False, indent=1))
+    return voc
+
+
+def load(rd: Path) -> dict:
+    """A registry with its induced classes (if any), for evidence_type(reg=...)."""
+    reg = json.loads((Path(rd) / "registry.json").read_text())
+    cp = Path(rd) / "classes.json"
+    reg["classes"] = json.loads(cp.read_text())["classes"] if cp.exists() else []
+    return reg
+
+
+def _norm_term(t: str) -> str:
+    t = re.sub(r"[^a-z0-9]+", " ", (t or "").lower()).strip()
+    return re.sub(r"s$", "", t)
 
 
 def explicit_class(reg: dict | None, label: str, dx_m: float | None) -> str:
-    """les, cpm or explicit_model for a run with explicit deep convection: the authors' own label first,
-    then the definitions the literature gives (only where every definition that bears on the grid
-    spacing agrees); explicit_model when neither settles it."""
-    lab = (label or "").lower()
-    if re.search(r"large[- ]eddy|\bles\b", lab):
-        return "les"
-    if re.search(r"convection[- ](permitting|resolving)|cloud[- ](system[- ])?resolving|storm[- ]resolving|\bcrm\b|\bsrm\b",
-                 lab):
-        return "cpm"
-    if reg is None or dx_m is None:
+    """The class of a run with explicit deep convection, from the induced vocabulary only: a class one of
+    whose terms appears in the authors' label; else the one explicit class whose definitions' grid
+    spacings span the run's; else explicit_model. No terms or thresholds of ours."""
+    classes = [c for c in (reg or {}).get("classes", []) if c.get("deep_convection") in ("explicit", "either")]
+    if not classes:
         return "explicit_model"
-    les = [d["dx_m"] for d in reg["definitions"] if d["dx_m"] and re.search(r"large[- ]eddy|\bles\b", d["term"].lower())]
-    cpm = [d["dx_m"] for d in reg["definitions"] if d["dx_m"] and re.search(
-        r"convection[- ](permitting|resolving)|cloud[- ](system[- ])?resolving|storm[- ]resolving", d["term"].lower())]
-    if les and dx_m <= min(les) and (not cpm or dx_m < min(cpm)):
-        return "les"
-    if cpm and les and dx_m > max(les) and dx_m <= max(cpm):
-        return "cpm"
+    lab = " " + _norm_term(label) + " "
+    named = {c["id"] for c in classes for t in c["terms"] if len(_norm_term(t)) > 1 and f" {_norm_term(t)} " in lab}
+    if len(named) == 1:
+        return named.pop()
+    if dx_m is not None:
+        inside = {c["id"] for c in classes if c.get("span_m") and c["span_m"][0] <= dx_m <= c["span_m"][1]}
+        if len(inside) == 1:
+            return inside.pop()
     return "explicit_model"

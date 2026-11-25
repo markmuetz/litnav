@@ -150,17 +150,17 @@ def test_evidence_type_from_the_runs_table():
     runs = [RUN, ml, param, les, unknown, OBS, old]
     m = {"evidence": "model", "experiment": {}}
     ex = lambda name, **kw: {**m, "experiment_name": name, **kw}
-    assert C.evidence_type(ex("ctrl"), runs, rule=2) == "cpm"                        # names match without case
-    assert C.evidence_type(ex("GC"), runs, rule=2) == "unknown"
-    assert C.evidence_type(ex("GCM"), runs, rule=2) == "parametrized_model"
-    assert C.evidence_type(ex("LES"), runs, rule=2) == "les"
-    assert C.evidence_type(ex("KM"), runs, rule=2) == "unknown"
-    assert C.evidence_type(ex("OLD"), runs, rule=2) == "cpm"
-    assert C.evidence_type(ex("other"), runs, rule=2) == "unknown"                   # falls back to its own facts
-    assert C.evidence_type(ex("radar cold pools"), runs, rule=2) == "unknown"        # not a model run
-    assert C.evidence_type(ex("radar cold pools", evidence="observations"), runs, rule=2) == "observations"
+    assert C.evidence_type(ex("ctrl"), runs) == "explicit_model"                 # names match without case
+    assert C.evidence_type(ex("GC"), runs) == "unknown"
+    assert C.evidence_type(ex("GCM"), runs) == "parametrized_model"
+    assert C.evidence_type(ex("LES"), runs) == "explicit_model"                  # no vocabulary: not classed
+    assert C.evidence_type(ex("KM"), runs) == "unknown"
+    assert C.evidence_type(ex("OLD"), runs) == "explicit_model"
+    assert C.evidence_type(ex("other"), runs) == "unknown"                       # falls back to its own facts
+    assert C.evidence_type(ex("radar cold pools"), runs) == "unknown"            # not a model run
+    assert C.evidence_type(ex("radar cold pools", evidence="observations"), runs) == "observations"
     recs, _ = C.records("k", [{"mentions": [{**ex("ctrl"), "statement": "s"}]}], {}, runs=runs)
-    assert recs[0]["experiment_name"] == "CTRL" and recs[0]["evidence_type"] == "explicit_model"   # rule 3
+    assert recs[0]["experiment_name"] == "CTRL" and recs[0]["evidence_type"] == "explicit_model"
 
 
 def test_methods_rows_pick_the_methods():
@@ -171,25 +171,6 @@ def test_methods_rows_pick_the_methods():
             {"id": "r", "kind": "body", "section_title": "3 Results", "text": "r" * 10}]
     assert [r["id"] for r in C.methods_rows(rows)] == ["m"]
     assert [r["id"] for r in C.methods_rows([rows[1], rows[3]])] == ["i", "r"]   # no methods title: the body
-
-
-def test_evidence_rule_2():
-    """Mark, 25 Nov 2026: not stated and coarser than 10 km -> parametrized (inferred); idealized models."""
-    from litnav import claims as C
-    m = lambda dx, param="unknown": {"evidence": "model", "experiment": {"resolution": dx,
-                                                                         "deep_convection_parametrized": param}}
-    assert C.evidence_type(m("1 degree"), rule=2) == "parametrized_model" and C.evidence_type(m("1 degree"), rule=1) == "unknown"
-    assert C.evidence_type(m("25 km"), rule=2) != C.evidence_type(m("25 km"), rule=1)
-    assert C.evidence_type(m("10 km"), rule=2) == "unknown"                      # 10 km itself: not beyond 10 km
-    assert C.evidence_type(m("5 and 10 km"), rule=2) == "unknown"
-    assert C.evidence_type(m("25 km", "no"), rule=2) == "cpm"   # said explicit
-    assert C.evidence_type(m("4 km and 50 km"), rule=2) == "mixed"               # unknown at 4 km, inferred at 50 km
-    assert C.evidence_type(m(""), rule=2) == "unknown"
-    qg = {**RUN, "name": "QG", "family": "idealized", "components": []}
-    x = {"evidence": "model", "experiment_name": "QG", "experiment": {}}
-    assert C.evidence_type(x, [qg], rule=2) == "idealized_model" and C.evidence_type(x, [qg], rule=1) == "unknown"
-    gcm = {**RUN, "name": "CAM", "horizontal_grid_spacing": "0.9 degrees", "components": []}
-    assert C.evidence_type({**x, "experiment_name": "CAM"}, [gcm], rule=2) == "parametrized_model"
 
 
 def test_degree_sign_look_alikes():
@@ -223,42 +204,48 @@ def test_lean_experiments_table_v7():
             "region": "", "period": "", "datasets": [], "method": ""}
     gcm = {**lean, "name": "GCM", "horizontal_grid_spacing": "N96", "deep_convection": "used"}
     m = {"evidence": "model", "experiment_name": "CTRL", "experiment": {}}
-    assert C.evidence_type(m, [lean, gcm], rule=2) == "cpm"
-    assert C.evidence_type(m, [lean, gcm]) == "explicit_model"     # rule 3: no 500 m cut; no label, no definitions
+    assert C.evidence_type(m, [lean, gcm]) == "explicit_model"     # no cut-off; no label, no vocabulary
     assert C.evidence_type({**m, "experiment_name": "GCM"}, [lean, gcm]) == "parametrized_model"
     assert "model run 'CTRL': UM, RA2T, 2.2 km; deep convection: off" in copyfix.runs_table([lean])
 
 
-def test_evidence_rule_3_from_the_literature():
-    """Mark, 25 Nov 2026: no thresholds of ours. Stated facts, the authors' labels, then what other papers
-    state for the same configuration (only where they agree)."""
+def test_evidence_from_the_literature():
+    """Mark, 25 Nov 2026: no thresholds or term lists of ours. Stated facts; the paper's own registry entry;
+    other papers' stated cases by bracketing (the split kept when they disagree); classes of explicit runs
+    from the vocabulary induced from the papers' definitions."""
     from litnav import claims as C
     run = lambda name, model, dx, dc="not_stated": {"kind": "model_run", "name": name, "model": model,
                                                     "configuration": "", "family": "physical",
                                                     "horizontal_grid_spacing": dx, "deep_convection": dc}
     m = lambda name, ct="shown": {"evidence": "model", "experiment_name": name, "experiment": {}, "claim_type": ct}
-    assert C.evidence_type(m("A"), [run("A", "CAM6", "1 degree")]) == "unknown"          # rule 2 said parametrized
+    case = lambda key, fam, name, grid, dx, dc, label="": {
+        "key": key, "family": fam, "name": name, "configuration": "", "role": "run_in_this_paper", "grid": grid,
+        "dx_m": dx, "deep_convection": dc, "passage": f"{key}#1", "author_label": label}
+    assert C.evidence_type(m("A"), [run("A", "CAM6", "1 degree")]) == "unknown"          # no rule 2 any more
+    assert C.evidence_type(m("A"), [run("A", "CAM6", "1 degree", "used")]) == "parametrized_model"
     assert C.evidence_type(m("A"), [run("A", "SAM", "1 km", "off")]) == "explicit_model"
-    assert C.evidence_type(m("A"), [run("A", "SAM cloud-resolving model", "1 km", "off")]) == "cpm"
-    assert C.evidence_type(m("A"), [run("A", "WRF large-eddy simulation", "100 m", "off")]) == "les"
-    reg = {"cases": [
-        {"key": "p1", "family": "cam", "name": "CAM5", "configuration": "", "role": "run_in_this_paper",
-         "grid": "1 degree", "dx_m": 111000.0, "deep_convection": "parametrized", "passage": "p1#1", "author_label": ""},
-        {"key": "p2", "family": "cam", "name": "CAM6", "configuration": "", "role": "run_in_this_paper",
-         "grid": "0.9 degrees", "dx_m": 99900.0, "deep_convection": "parametrized", "passage": "p2#1", "author_label": ""},
-        {"key": "p3", "family": "um", "name": "UM", "configuration": "", "role": "run_in_this_paper",
-         "grid": "4.4 km", "dx_m": 4400.0, "deep_convection": "parametrized", "passage": "p3#1", "author_label": ""},
-        {"key": "p4", "family": "um", "name": "UM", "configuration": "", "role": "run_in_this_paper",
-         "grid": "4 km", "dx_m": 4000.0, "deep_convection": "explicit", "passage": "p4#1", "author_label": ""},
-        {"key": "me", "family": "sam", "name": "SAM", "configuration": "", "role": "run_in_this_paper",
-         "grid": "2 km", "dx_m": 2000.0, "deep_convection": "explicit", "passage": "me#3", "author_label":
-         "cloud-resolving model"}], "definitions": []}
-    cam = [run("A", "CAM6", "1 degree")]
+    reg = {"cases": [case("p1", "cam", "CAM5", "2 degrees", 222000.0, "parametrized"),
+                     case("p2", "cam", "CAM5", "0.5 degrees", 55500.0, "parametrized"),
+                     case("p3", "um", "UM", "1.5 km", 1500.0, "explicit"),
+                     case("p4", "um", "UM", "10 km", 10000.0, "parametrized"),
+                     case("me", "sam", "SAM", "2 km", 2000.0, "explicit", "cloud-resolving model")],
+           "definitions": [],
+           "classes": [{"id": "cloud_resolving_model", "terms": ["cloud-resolving model", "CRM"],
+                        "deep_convection": "explicit", "span_m": [1000.0, 4000.0]},
+                       {"id": "large_eddy_simulation", "terms": ["LES", "large-eddy simulation"],
+                        "deep_convection": "explicit", "span_m": [10.0, 200.0]}]}
+    cam = [run("A", "CAM5", "1 degree")]                                          # bracketed by 0.5 and 2 degrees
     assert C.evidence_type(m("A"), cam, reg=reg, key="me") == "parametrized_model"
-    assert C.evidence_basis(m("A"), cam, reg=reg, key="me") == {"basis": "literature", "sources": ["p2"]}   # the closer configuration (CAM6)
-    assert C.evidence_type(m("A"), [run("A", "UM", "4 km")], reg=reg, key="me") == "unknown"   # the papers disagree
+    assert C.evidence_basis(m("A"), cam, reg=reg, key="me") == {
+        "basis": "literature", "sources": ["p1", "p2"], "split": {"parametrized": 2, "explicit": 0}}
+    um = [run("A", "UM", "4 km")]                                                 # between explicit and parametrized
+    assert C.evidence_type(m("A"), um, reg=reg, key="me") == "unknown"
+    assert C.evidence_basis(m("A"), um, reg=reg, key="me")["basis"] == "disputed"
+    assert C.evidence_type(m("A"), [run("A", "CAM5", "5 degrees")], reg=reg, key="me") == "unknown"   # no extrapolation
     sam = [run("A", "SAM", "2 km")]
-    assert C.evidence_type(m("A"), sam, reg=reg, key="me") == "cpm"                 # own registry entry and label
+    assert C.evidence_type(m("A"), sam, reg=reg, key="me") == "cloud_resolving_model"   # own entry, authors' label
     assert C.evidence_basis(m("A"), sam, reg=reg, key="me")["basis"] == "own_registry"
+    assert C.evidence_type(m("A"), [run("A", "WRF", "100 m", "off")], reg=reg, key="x") == "large_eddy_simulation"
+    assert C.evidence_type(m("A"), [run("A", "WRF", "500 m", "off")], reg=reg, key="x") == "explicit_model"
     assert C.evidence_type(m("X"), cam, reg=reg, key="me") == "parametrized_model"  # shown, no run named: one class
     assert C.evidence_type(m("X", "restated"), cam, reg=reg, key="me") == "unknown"

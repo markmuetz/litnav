@@ -32,16 +32,24 @@ def test_build_lookup_and_scoring(tmp_path):
     reg = modelreg.build(tmp_path)
     assert len(reg["cases"]) == 5 and len(reg["definitions"]) == 2
     assert modelreg.lookup(reg, "Community Atmosphere Model version 6 (CAM6-FV)", "")["treatment"] == "parametrized"
-    assert modelreg.lookup(reg, "SAM", "1 km") is None                          # c2022 disagrees: no rule
-    assert modelreg.lookup(reg, "SAM", "1 km", exclude="c2022")["keys"] == ["a2020", "b2021"]
-    assert modelreg.lookup(reg, "SAM", "50 km", exclude="c2022") is None        # no neighbour within a factor 2
+    hit = modelreg.lookup(reg, "SAM", "1.2 km")                    # bracketed by 1 km (a) and 1.5 km (c)
+    assert hit["treatment"] is None and hit["split"] == {"parametrized": 1, "explicit": 1}
+    assert modelreg.lookup(reg, "SAM", "1.5 km")["treatment"] == "parametrized"   # a stated case at that spacing
+    assert modelreg.lookup(reg, "SAM", "0.5 km") is None                       # finer than any stated case
+    assert modelreg.lookup(reg, "SAM", "1.8 km", exclude="c2022")["keys"] == ["a2020", "b2021"]
+    assert modelreg.lookup(reg, "SAM", "50 km", exclude="c2022") is None      # beyond the stated cases
+    assert modelreg.lookup(reg, "SAM", "1.8 km", exclude="c2022", match="exact") is None
+    assert modelreg.lookup(reg, "SAM", "1.8 km", exclude="c2022", match=("factor", 2.0))["treatment"] == "explicit"
     assert modelreg.lookup(reg, "SAMURAI", "1 km") is None                      # whole-word family match
-    assert modelreg.explicit_class(reg, "", 50.0) == "les"                      # from the definitions
-    assert modelreg.explicit_class(reg, "", 2000.0) == "cpm"
-    assert modelreg.explicit_class(reg, "", 8000.0) == "explicit_model"         # beyond every definition
-    assert modelreg.explicit_class(None, "a convection-permitting run", None) == "cpm"   # the authors' label
     sc = modelreg.score_stated(reg)
-    assert sc["stated_cases"] == 4 and sc["answered"] >= 1
+    assert sc["stated_cases"] == 4 and sc["match"] == "bracket"
+    voc = [{"id": "les", "terms": ["large-eddy simulation"], "deep_convection": "explicit", "span_m": [10.0, 100.0]},
+           {"id": "cp", "terms": ["convection-permitting"], "deep_convection": "explicit", "span_m": [1000.0, 4000.0]}]
+    r2 = {**reg, "classes": voc}
+    assert modelreg.explicit_class(r2, "", 50.0) == "les" and modelreg.explicit_class(r2, "", 2000.0) == "cp"
+    assert modelreg.explicit_class(r2, "", 8000.0) == "explicit_model"         # beyond every class's span
+    assert modelreg.explicit_class(r2, "our convection-permitting run", None) == "cp"   # the authors' label
+    assert modelreg.explicit_class(reg, "convection-permitting", 2000.0) == "explicit_model"   # no vocabulary
 
 
 def test_jobs_open_only(ilib):
