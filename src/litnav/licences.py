@@ -69,9 +69,9 @@ def open_codes(lib) -> set[str]:
     return set(lib.config.get("licences", {}).get("open", DEFAULT_OPEN))
 
 
-def apply_to(it, found: tuple[str, str] | None, opens: set[str], *, apply: bool) -> str:
+def apply_to(it, found: tuple[str, str] | None, opens: set[str], *, apply: bool, source: str = "crossref") -> str:
     """Record a licence check on an item; returns 'open', 'cc-other', 'none'."""
-    lic = {"source": "crossref", "checked": dt.date.today().isoformat()}
+    lic = {"source": source, "checked": dt.date.today().isoformat()}
     if found:
         lic["url"], lic["code"] = found[1], found[0]
     status = "none" if not found else ("open" if found[0] in opens else "cc-other")
@@ -88,10 +88,15 @@ def run(lib, client, *, apply=False, recheck=False, keys=None, log=print) -> dic
     opens = open_codes(lib)
     items = [lib.get(k) for k in keys] if keys else list(lib.items())
     counts = {"open": 0, "cc-other": 0, "none": 0, "no-doi": 0, "skipped": 0, "failed": 0}
-    todo = []
+    todo, arx = [], []
     for it in items:
+        aid = (it.meta.get("ids") or {}).get("arxiv")
         if it.sharing != "licensed" or (it.meta.get("licence") and not recheck):
             counts["skipped"] += 1
+        elif not it.allowed(S.LOOKUP):
+            counts["skipped"] += 1
+        elif not it.doi and aid:
+            arx.append((it, aid))           # a preprint: arXiv records its licence
         elif not it.doi:
             counts["no-doi"] += 1
         elif not it.allowed(S.LOOKUP):
@@ -109,6 +114,17 @@ def run(lib, client, *, apply=False, recheck=False, keys=None, log=print) -> dic
         if st != "none":
             log(f"  [{i}/{len(todo)}] {it.key}: {found[0]}" + (" -> open" if st == "open" else
                                                               " (not in [licences] open)"))
+    from .sources import arxiv
+    for i, (it, aid) in enumerate(arx, 1):
+        url = arxiv.licence(client, aid)
+        if url is None:
+            counts["failed"] += 1
+            continue
+        c = code(url)
+        st = apply_to(it, (c, url) if c else None, opens, apply=apply, source="arxiv")
+        counts[st] += 1
+        log(f"  [arXiv {i}/{len(arx)}] {it.key}: {c or url or 'no licence given'}"
+            + (" -> open" if st == "open" else ""))
     return counts
 
 

@@ -46,6 +46,23 @@ def lookup(client, aid: str) -> dict | None:
             "abstract": grab("summary")}
 
 
+OAI = "https://oaipmh.arxiv.org/oai"
+
+
+def licence(client, aid: str) -> str | None:
+    """The licence URL arXiv records for a preprint ('' if none is given; None if
+    the lookup failed). arXiv's default (nonexclusive-distrib) is not a CC licence."""
+    try:
+        x = client.get(OAI, purpose=LOOKUP, accept="text/xml",
+                       params={"verb": "GetRecord", "identifier": f"oai:arXiv.org:{aid}", "metadataPrefix": "arXiv"})
+    except NetError:
+        return None
+    if "<GetRecord>" not in x:
+        return None
+    m = re.search(r"<license>\s*(.*?)\s*</license>", x, re.S)
+    return m.group(1) if m else ""
+
+
 def to_bibtex(rec: dict, key: str) -> str:
     names = " and ".join(f"{family(n)}, {n[:len(n) - len(family(n))].strip()}".rstrip(", ")
                          for n in rec["authors"])

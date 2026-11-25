@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import __version__, sharing
 
-_MIN_INTERVAL = {"export.arxiv.org": 3.0, "api.crossref.org": 0.2,
+_MIN_INTERVAL = {"export.arxiv.org": 3.0, "oaipmh.arxiv.org": 3.0, "api.crossref.org": 0.2,
                  "api.openalex.org": 0.12, "api.semanticscholar.org": 1.1}
 _last: dict[str, float] = {}
 _lock = threading.Lock()

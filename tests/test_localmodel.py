@@ -607,3 +607,30 @@ def test_spool_pull_waits_for_the_runners_reask(ilib, tmp_path):
         f.write(json.dumps({"id": job["id"] + "-r", "ok": True, "output": SUMMARY, "model": "m"}) + "\n")
     spool._apply(lib, "b1", b, d, log=lambda *a: None, final=True)
     assert job["id"] in b["imported"] and lib.get(it.key).summary()["summary"] == SUMMARY["summary"]
+
+
+def test_licences_from_arxiv_for_preprints(ilib):
+    from litnav import licences
+    it = ilib.get("smith2021cold")
+    it.meta.setdefault("ids", {})["arxiv"] = "2404.03868"
+    it.meta.pop("licence", None)
+    it.save_meta()
+    it.entry.pop("doi", None) if isinstance(it.entry, dict) else None
+
+    class C:
+        def get(self, url, **kw):
+            assert "oaipmh.arxiv.org" in url
+            return ("<OAI-PMH><GetRecord><record><metadata><arXiv><license>"
+                    "http://creativecommons.org/licenses/by/4.0/</license></arXiv></metadata></record></GetRecord>"
+                    "</OAI-PMH>")
+    import litnav.library as L
+    orig = L.Item.doi
+    L.Item.doi = property(lambda self: "")
+    try:
+        r = licences.run(ilib, C(), apply=True, keys=["smith2021cold"], log=lambda *a: None)
+    finally:
+        L.Item.doi = orig
+    assert r["open"] == 1
+    from litnav.library import Library
+    it2 = Library(ilib.root).get("smith2021cold")
+    assert it2.sharing == "open" and it2.meta["licence"]["source"] == "arxiv"
