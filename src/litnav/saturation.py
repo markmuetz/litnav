@@ -5,7 +5,8 @@ template; of key fact, condition, shared root and paper kind for G0) seen after 
 flattens well before the sample size, more papers would mostly repeat known kinds; if it still rises, the
 sample is too small. Kinds are consensus clusters of the names (as in the tallies); because that grouping is a
 method choice, the curve is given at two granularities (agreement 0.5 and 0.8: the finer one counts more
-kinds). Code only: local embeddings, no model calls. Writes saturation.json in the run folder."""
+kinds). Chao1 (Chao 1984, from the kinds seen in one and in two papers) estimates how many kinds the
+population holds, so share_seen says what part of them the sample found. Code only: local embeddings, no model calls. Writes saturation.json in the run folder."""
 from __future__ import annotations
 
 import json
@@ -65,7 +66,13 @@ def curve(rows: list[tuple[str, str]], labels: list[int], *, orders: int = ORDER
     sa, sr = stat(allc), stat(recc)
     tail = max(1, n // 5)                               # new kinds per paper over the last fifth of the sample
     rate = lambda s: round((s[-1]["mean"] - s[-1 - tail]["mean"]) / tail, 2) if n > tail else None
-    return {"papers": n, "kinds": len(papers_of), "recurring": len(recurring),
+    f1 = sum(len(ks) == 1 for ks in papers_of.values())     # kinds seen in exactly one paper
+    f2 = sum(len(ks) == 2 for ks in papers_of.values())     # ... in exactly two
+    # Chao1 (Chao 1984; incidence form): estimated number of kinds in the population the sample is drawn
+    # from; bias-corrected form when f2 = 0
+    chao1 = len(papers_of) + (f1 * f1 / (2 * f2) if f2 else f1 * (f1 - 1) / 2) * (n - 1) / n
+    return {"papers": n, "kinds": len(papers_of), "recurring": len(recurring), "f1": f1, "f2": f2,
+            "chao1": round(chao1, 1), "share_seen": round(len(papers_of) / chao1, 2) if chao1 else None,
             "new_per_paper_last_fifth": rate(sa), "new_recurring_per_paper_last_fifth": rate(sr),
             "all": sa, "recurring_curve": sr}
 

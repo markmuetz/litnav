@@ -638,5 +638,5 @@ def cmd_saturation(a):
             marks = [x for x in c["recurring_curve"] if x["n"] in (5, 10, 20, 40, 80, c["papers"])]
             print(f"{name} (agree {agree}): {c['papers']} papers, {c['kinds']} kinds ({c['recurring']} recurring); "
                   f"recurring seen at n=" + ", ".join(f"{x['n']}: {x['mean']:g}" for x in marks)
-                  + f"; new recurring kinds per paper over the last fifth: {c['new_recurring_per_paper_last_fifth']}")
+                  + f"; new recurring kinds per paper over the last fifth: {c['new_recurring_per_paper_last_fifth']}" + f"; Chao1 {c['chao1']:g} (seen {c['share_seen']:.0%})")
     return 0
