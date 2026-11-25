@@ -245,8 +245,19 @@ def stratified(strata: dict[str, list[str]], n: int, rng: random.Random) -> list
     return sorted(out)
 
 
-def sample(lib, n: int = 100, *, k: int = 12, seed: int = 1, label: str = "") -> Path:
-    items = [it for it in lib.items() if _usable(it)]
+def sample(lib, n: int = 100, *, k: int = 12, seed: int = 1, label: str = "", open_only: bool = False,
+           like: Path | None = None) -> Path:
+    """open_only: the corpus is the open papers (sample and survey). like: copy another run's sample and
+    corpus, so two models can be compared on the same papers."""
+    if like is not None:
+        rd = new_run(lib, label)
+        src = json.loads((Path(like) / "run.json").read_text())
+        (rd / "sample.jsonl").write_text((Path(like) / "sample.jsonl").read_text())
+        (rd / "run.json").write_text(json.dumps({
+            "pass": "G0", "prompt_version": PROMPT_VERSION, "created": dt.datetime.now().isoformat(timespec="seconds"),
+            "open_only": src.get("open_only", False), "like": str(like), "sample": src["sample"]}, indent=1))
+        return rd
+    items = [it for it in lib.items() if _usable(it) and (not open_only or it.allowed(S.SEND_OUT))]
     keys = [it.key for it in items]
     cl = _clusters(lib, keys, k, seed)
     strata = defaultdict(list)
@@ -260,7 +271,7 @@ def sample(lib, n: int = 100, *, k: int = 12, seed: int = 1, label: str = "") ->
                                                                               if k_ in v)} for k_ in chosen])
     (rd / "run.json").write_text(json.dumps({
         "pass": "G0", "prompt_version": PROMPT_VERSION, "created": dt.datetime.now().isoformat(timespec="seconds"),
-        "sample": {"n": len(chosen), "asked": n, "clusters": k if cl else 0, "seed": seed,
+        "open_only": open_only, "sample": {"n": len(chosen), "asked": n, "clusters": k if cl else 0, "seed": seed,
                    "pool": len(items), "strata": len(strata)}}, indent=1))
     return rd
 
@@ -306,9 +317,36 @@ def jobs(lib, rd: Path, *, survey: bool = True) -> list[dict]:
         localmodel.gate(it)
         out.append(inventory_job(lib, it))
     if survey:
+        open_only = json.loads((rd / "run.json").read_text()).get("open_only", False)
         out += [survey_job(lib, it) for it in sorted(lib.items(), key=lambda i: i.key)
-                if it.allowed(S.LOCAL_MODEL) and (abstracts.public(it) or it.has_text)]
+                if it.allowed(S.LOCAL_MODEL) and (abstracts.public(it) or it.has_text)
+                and (not open_only or (it.allowed(S.SEND_OUT) and it.has_text))]
     return out
+
+
+def outside_ok(lib, job: dict) -> bool:
+    """May this job go to an outside model (Claude, Gemini)? Paper text only from open papers; a survey
+    built from a public abstract or a model-written summary from any paper that is not confidential."""
+    it = lib.get(job["key"])
+    if it.allowed(S.SEND_OUT):
+        return True
+    return job.get("step") == "survey" and job.get("source") in ("abstract", "summary") and it.allowed(S.LOOKUP)
+
+
+def run_outside(lib, rd: Path, *, model: str = "claude-haiku-5-5", effort: str = "low",
+                concurrency: int = 8, log=print) -> int:
+    """Run a run folder's jobs (jobs.jsonl) on the Anthropic API, into results.jsonl. Refuses the whole
+    run if any job would send a licensed paper's text out."""
+    from . import batch_runner
+    js = _jsonl(rd / "jobs.jsonl")
+    bad = [j["id"] for j in js if not outside_ok(lib, j)]
+    if bad:
+        raise derived.Refused(f"{len(bad)} job(s) would send licensed text out, e.g. {bad[:3]}")
+    m = json.loads((rd / "run.json").read_text()) if (rd / "run.json").is_file() else {}
+    m.update({"model": model, "via": "anthropic", "effort": effort})
+    (rd / "run.json").write_text(json.dumps(m, indent=1))
+    return batch_runner.run(rd / "jobs.jsonl", rd / "results.jsonl", f"anthropic:{effort}", model,
+                            concurrency=concurrency, log=log)
 
 
 def push(lib, rd: Path, *, submit: bool = True, log=print) -> dict:

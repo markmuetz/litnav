@@ -69,9 +69,52 @@ def parse_json(text: str):
     raise ValueError("no JSON object in the reply")
 
 
+_UNSUPPORTED = ("maxItems", "minItems", "maxLength", "minLength", "maximum", "minimum")
+
+
+def strip_limits(schema):
+    """The schema without the size limits Anthropic's structured outputs reject (the prompts say them)."""
+    if isinstance(schema, dict):
+        return {k: strip_limits(v) for k, v in schema.items() if k not in _UNSUPPORTED}
+    if isinstance(schema, list):
+        return [strip_limits(v) for v in schema]
+    return schema
+
+
+def anthropic_chat(model: str, messages: list, *, schema: dict | None = None, timeout: float = 600,
+                   effort: str = "") -> tuple[str, str]:
+    """One call to the Anthropic API (key from ANTHROPIC_API_KEY), with the schema as a structured
+    output. Errors come back as OSError or ValueError, as from the OpenAI-compatible path."""
+    import anthropic                                  # only on this path: the cluster copy never needs it
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    msgs = [m for m in messages if m["role"] != "system"]
+    kw = {}
+    oc = {}
+    if schema:
+        oc["format"] = {"type": "json_schema", "schema": strip_limits(schema)}
+    if effort:
+        oc["effort"] = effort
+    if oc:
+        kw["output_config"] = oc
+    if system:
+        kw["system"] = system
+    try:
+        client = anthropic.Anthropic(max_retries=8, timeout=timeout)
+        r = client.messages.create(model=model, max_tokens=32000, messages=msgs, **kw)
+    except anthropic.APIError as e:
+        raise OSError(f"anthropic: {e}") from None
+    if r.stop_reason in ("refusal", "max_tokens"):
+        raise ValueError(f"anthropic: stop_reason {r.stop_reason}")
+    return next((b.text for b in r.content if b.type == "text"), ""), r.model
+
+
 def chat(url: str, model: str, messages: list, *, schema: dict | None = None,
          timeout: float = 600, api_key: str = "", temperature: float = 0.1) -> tuple[str, str]:
-    """One chat completion. Returns (reply text, model name the server reports)."""
+    """One chat completion. Returns (reply text, model name the server reports).
+    url "anthropic" or "anthropic:<effort>" sends it to the Anthropic API instead."""
+    if url.startswith("anthropic"):
+        return anthropic_chat(model, messages, schema=schema, timeout=timeout,
+                              effort=url.partition(":")[2])
     body = {"model": model, "messages": messages, "temperature": temperature, "stream": False}
     if schema:
         body["response_format"] = {"type": "json_schema",

@@ -98,3 +98,26 @@ def test_gemini_sees_open_papers_inventories_only(ilib, monkeypatch):
     t = g0.evidence_text(rd, open_only=True)
     assert "OPEN-ONE" in t and "LICENSED-ONE" not in t
     assert "OPEN-TALLY" in t and "ALL-PAPERS-TALLY" not in t
+
+
+def test_open_only_sample_like_and_the_outside_gate(ilib):
+    lib = strict(ilib)
+    rd = g0.sample(lib, n=5, open_only=True)
+    keys = {json.loads(l)["key"] for l in (rd / "sample.jsonl").read_text().splitlines()}
+    assert keys == {"jones2019gravity"}
+    js = g0.jobs(lib, rd)
+    assert {j["key"] for j in js} == {"jones2019gravity"}            # the survey too: open papers only
+    rd2 = g0.sample(lib, label="haiku", like=rd)
+    assert (rd2 / "sample.jsonl").read_text() == (rd / "sample.jsonl").read_text()
+    assert all(g0.outside_ok(lib, j) for j in js)
+    lic = g0.inventory_job(lib, lib.get("smith2021cold"))
+    assert not g0.outside_ok(lib, lic)
+    (rd2 / "jobs.jsonl").write_text(json.dumps(lic) + "\n")
+    with pytest.raises(Exception):
+        g0.run_outside(lib, rd2)
+
+
+def test_strip_limits_for_anthropic():
+    from litnav import batch_runner
+    s = batch_runner.strip_limits(g0.inventory_schema(["a"]))
+    assert "maxItems" not in json.dumps(s) and "enum" in json.dumps(s)

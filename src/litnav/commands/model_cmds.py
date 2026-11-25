@@ -62,7 +62,10 @@ def add(sub):
     p = sub.add_parser("g0", help="G0: induce the domain schema from the papers, blind (survey, inventories, "
                        "tally, then Fable drafts and Opus and Gemini review): sample, push, status, tally, "
                        "synthesize, review, revise")
-    p.add_argument("action", choices=["sample", "push", "status", "tally", "synthesize", "review", "revise"])
+    p.add_argument("action", choices=["sample", "jobs", "push", "status", "tally", "synthesize", "review", "revise"],
+                   help="jobs: write jobs.jsonl without pushing (then `litnav claude-run`)")
+    p.add_argument("--open-only", action="store_true", help="sample: the corpus is the open papers")
+    p.add_argument("--like", help="sample: copy this run folder's sample and corpus")
     p.add_argument("--run-dir", help="the run folder (default: the newest under derived/g0)")
     p.add_argument("-n", type=int, default=100, help="sample: papers to inventory")
     p.add_argument("--clusters", type=int, default=12, help="sample: embedding clusters to stratify by")
@@ -73,6 +76,14 @@ def add(sub):
     p.add_argument("--model", help="synthesize/revise: the drafting model (default Fable)")
     p.add_argument("--no-submit", action="store_true")
     p.set_defaults(func=cmd_g0)
+
+    p = sub.add_parser("claude-run", help="run a run folder's jobs.jsonl on the Anthropic API (key from "
+                       "ANTHROPIC_API_KEY): open papers' text only; refuses a run with licensed text")
+    p.add_argument("run_dir")
+    p.add_argument("--model", default="claude-haiku-5-5")
+    p.add_argument("--effort", default="low", choices=["low", "medium", "high"])
+    p.add_argument("-j", "--concurrency", type=int, default=8)
+    p.set_defaults(func=cmd_claude_run)
 
     p = sub.add_parser("evals", help="every recorded eval run (eval/runs.jsonl): task, model, judge, scores")
     p.add_argument("--task")
@@ -466,12 +477,17 @@ def cmd_g0(a):
     from .. import g0
     lib = Library.find(a.library)
     if a.action == "sample":
-        rd = g0.sample(lib, a.n, k=a.clusters, seed=a.seed, label=a.label)
+        rd = g0.sample(lib, a.n, k=a.clusters, seed=a.seed, label=a.label, open_only=a.open_only,
+                       like=Path(a.like) if a.like else None)
         print(json.dumps(json.loads((rd / "run.json").read_text())["sample"]))
         print(f"run folder {rd}; next: litnav g0 push")
         return 0
     rd = Path(a.run_dir) if a.run_dir else g0.latest(lib)
-    if a.action == "push":
+    if a.action == "jobs":
+        js = g0.jobs(lib, rd)
+        g0._write_jsonl(rd / "jobs.jsonl", js)
+        print(f"{len(js)} job(s) in {rd / 'jobs.jsonl'}")
+    elif a.action == "push":
         r = g0.push(lib, rd, submit=not a.no_submit)
         print(f"pushed {r['jobs']} job(s) as batch {r['batch']}; `litnav queue pull` brings them back")
     elif a.action == "status":
@@ -490,4 +506,12 @@ def cmd_g0(a):
     elif a.action == "revise":
         g0.revise(lib, rd, model=a.model or g0.FABLE)
         print(f"draft written: {g0.drafts(rd)[-1]}")
+    return 0
+
+
+def cmd_claude_run(a):
+    from .. import g0
+    lib = Library.find(a.library)
+    n = g0.run_outside(lib, Path(a.run_dir), model=a.model, effort=a.effort, concurrency=a.concurrency)
+    print(f"{n} job(s) done")
     return 0
