@@ -502,7 +502,7 @@ def _strip_passages(o):
     return o
 
 
-def evidence_text(rd: Path, *, max_chars: int = 400_000, open_only: bool = False) -> str:
+def evidence_text(rd: Path, *, max_chars: int = 1_600_000, open_only: bool = False) -> str:
     """The bundle and the cleaned inventories, without passage ids, keyed by an anonymous number.
     open_only: inventories of open papers only (and bundle.open.json). Not used by default: Mark ruled
     on 25 Nov 2026 that inventories and tallies may go to Claude and Gemini, like summaries."""
