@@ -171,3 +171,22 @@ def test_methods_rows_pick_the_methods():
             {"id": "r", "kind": "body", "section_title": "3 Results", "text": "r" * 10}]
     assert [r["id"] for r in C.methods_rows(rows)] == ["m"]
     assert [r["id"] for r in C.methods_rows([rows[1], rows[3]])] == ["i", "r"]   # no methods title: the body
+
+
+def test_evidence_rule_2():
+    """Mark, 25 Nov 2026: not stated and coarser than 10 km -> parametrized (inferred); idealized models."""
+    from litnav import claims as C
+    m = lambda dx, param="unknown": {"evidence": "model", "experiment": {"resolution": dx,
+                                                                         "deep_convection_parametrized": param}}
+    assert C.evidence_type(m("1 degree")) == "parametrized_model" and C.evidence_type(m("1 degree"), rule=1) == "unknown"
+    assert C.evidence_inferred(m("25 km"))
+    assert C.evidence_type(m("10 km")) == "unknown"                      # 10 km itself: not beyond 10 km
+    assert C.evidence_type(m("5 and 10 km")) == "unknown"
+    assert C.evidence_type(m("25 km", "no")) == "cpm" and not C.evidence_inferred(m("25 km", "no"))   # said explicit
+    assert C.evidence_type(m("4 km and 50 km")) == "mixed"               # unknown at 4 km, inferred at 50 km
+    assert C.evidence_type(m("")) == "unknown"
+    qg = {**RUN, "name": "QG", "family": "idealized", "components": []}
+    x = {"evidence": "model", "experiment_name": "QG", "experiment": {}}
+    assert C.evidence_type(x, [qg]) == "idealized_model" and C.evidence_type(x, [qg], rule=1) == "unknown"
+    gcm = {**RUN, "name": "CAM", "horizontal_grid_spacing": "0.9 degrees", "components": []}
+    assert C.evidence_type({**x, "experiment_name": "CAM"}, [gcm]) == "parametrized_model"

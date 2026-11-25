@@ -227,7 +227,7 @@ def test_mention_groups_and_records():
     assert r["id"].startswith("m_") and "quote" not in r and quotes[0]["mention"] == r["id"]
     assert r["value"] == {"value": 1200.0, "as_written": "1,200", "units": "m", "low": None, "high": 1500.0}
     assert r["hedging"] == {"level": "weak", "words": "may"} and r["section"] == "Results" and r["page"] == 3
-    assert r["evidence_type"] == "cpm" and r["experiment"]["grid_spacing_m"] == 2200.0 and r["evidence_rule"] == 1
+    assert r["evidence_type"] == "cpm" and r["experiment"]["grid_spacing_m"] == 2200.0 and r["evidence_rule"] == 2
     assert C._value({"value": "", "units": "", "low": "", "high": ""}) is None
     assert C.grounded("radiate from squall-\nlines", "Waves RADIATE   from squall-\n lines here")
     assert not C.grounded("", "anything")

@@ -26,16 +26,17 @@ import secrets
 
 PROMPT_VERSION = 4              # v4: a runs table per paper (configuration and schemes), mentions name their run
 SCHEMA_VERSION = "0.4"
-EVIDENCE_RULE = 1               # evidence_type() below; Mark, 23 Nov 2026
+EVIDENCE_RULE = 2               # evidence_type() below; rule 1 Mark 23 Nov 2026, rule 2 Mark 25 Nov 2026
 LES_MAX_M = 500                 # grid spacing at or below this, with no deep-convection scheme: les
+PARAM_MIN_M = 10_000            # rule 2: coarser than this, scheme not stated -> parametrized (inferred)
 MAX_ITEMS = 40                  # mentions a call; report counts calls that hit it
 GROUP_CHARS = 20_000            # passages per call: fits a 32k-token context with room to think
 SKIP_KINDS = {"ack", "front"}   # not claims; the title and abstract go to every call anyway
 
 CLAIM_TYPES = ["shown", "restated", "assumed", "speculation"]
 EVIDENCE_KINDS = ["observations", "reanalysis", "model", "theory", "mixed", "unknown"]     # what the model labels
-EVIDENCE_TYPES = ["observations", "reanalysis", "les", "cpm", "parametrized_model", "theory", "mixed",
-                  "unknown"]                                                             # the record's, by rule
+EVIDENCE_TYPES = ["observations", "reanalysis", "les", "cpm", "parametrized_model", "idealized_model", "theory",
+                  "mixed", "unknown"]                                                    # the record's, by rule
 YNU = ["yes", "no", "unknown"]
 HEDGING = ["strong", "moderate", "weak"]
 SOURCES = ["text", "figure", "table"]
@@ -43,7 +44,7 @@ SOURCES = ["text", "figure", "table"]
 COMPONENT_KINDS = ["deep_convection", "shallow_convection", "microphysics", "boundary_layer", "turbulence",
                    "radiation", "land_surface", "gravity_wave_drag"]
 COMPONENT_STATES = ["used", "off", "not_stated"]
-MODEL_FAMILIES = ["physical", "machine_learning", "hybrid", "unknown"]
+MODEL_FAMILIES = ["physical", "idealized", "machine_learning", "hybrid", "unknown"]
 DOMAINS = ["global", "limited_area", "idealized", "single_column", "unknown"]
 EXPERIMENT_KINDS = ["model_run", "observational_analysis"]
 DATASET_KINDS = ["satellite", "radar", "in_situ", "station", "field_campaign", "reanalysis", "model_output",
@@ -145,8 +146,9 @@ RUNS_SYSTEM = (
     "- For a model run (all '' or unknown, and components an empty list, for an observational analysis): "
     "model, version, configuration: as written ('' if not stated), e.g. 'Met Office Unified Model', "
     "'vn11.1', 'RA2T'. configuration_cited: the reference the paper gives for the configuration (author and "
-    "year as written), '' if none. family: physical (a numerical model solving equations), machine_learning "
-    "(a data-driven model such as GraphCast), hybrid, or unknown. horizontal_grid_spacing, vertical_levels: "
+    "year as written), '' if none. family: physical (a full numerical weather or climate model, LES or CRM), "
+    "idealized (a simplified dynamical model: quasi-geostrophic, shallow-water, a dry or two-layer model, a "
+    "conceptual or toy model), machine_learning (a data-driven model such as GraphCast), hybrid, or unknown. horizontal_grid_spacing, vertical_levels: "
     "as written ('' if not stated). domain: global, limited_area, idealized, single_column or unknown. "
     "coupling: atmosphere_only, coupled or unknown; ocean_model as written ('' if none).\n"
     "- components, for a model run: one entry for each kind: " + ", ".join(COMPONENT_KINDS) + ". For each: "
@@ -359,7 +361,8 @@ def records(key: str, replies: list[dict], chunk_info: dict, *, run: str = "",
                 "chunk": m.get("chunk"), "section": ci.get("section_title"), "page": ci.get("page"),
                 "statement": m.get("statement", ""), "source": m.get("source"),
                 "claim_type": m.get("claim_type"), "evidence_type": evidence_type(m, runs),
-                "evidence_rule": EVIDENCE_RULE, "evidence": m.get("evidence"),
+                "evidence_rule": EVIDENCE_RULE, "evidence_inferred": evidence_inferred(m, runs),
+                "evidence": m.get("evidence"),
                 "experiment_name": entry_name(find_run(runs, mention_experiment(m)) or {}),
                 "experiment": {**(m.get("experiment") or {}),
                                "grid_spacing_m": grid_spacing_m((m.get("experiment") or {}).get("resolution"))},
@@ -381,7 +384,7 @@ def grounded(quote: str, chunk_text: str) -> bool:
     return bool(q) and q in norm(chunk_text)
 
 
-# ---- evidence type, by rule (EVIDENCE_RULE 1; the thresholds live here, not in the prompt)
+# ---- evidence type, by rule (EVIDENCE_RULE; the thresholds live here, not in the prompt)
 
 _UNITS = {"m": 1.0, "metres": 1.0, "meters": 1.0, "km": 1000.0, "kilometres": 1000.0, "kilometers": 1000.0,
           "deg": 111_000.0, "degree": 111_000.0, "degrees": 111_000.0, "°": 111_000.0}
@@ -404,13 +407,15 @@ def grid_spacing_m(text: str | None) -> float | None:
     return min(xs) if xs else None
 
 
-def _model_class(param: str | None, dx: float | None) -> str:
+def _model_class(param: str | None, dx: float | None, rule: int = EVIDENCE_RULE) -> str:
     if param == "yes":
         return "parametrized_model"
     if param == "no":
         if dx is None:
             return "unknown"
         return "les" if dx <= LES_MAX_M else "cpm"
+    if rule >= 2 and dx is not None and dx > PARAM_MIN_M:
+        return "parametrized_model"         # rule 2: not stated, coarser than 10 km (Mark, 25 Nov 2026)
     return "unknown"
 
 
@@ -423,32 +428,46 @@ def run_facts(run: dict) -> dict:
             "family": run.get("family", "unknown")}
 
 
-def evidence_type(m: dict, runs: list[dict] | None = None) -> str:
-    """With a runs table (v4), a mention naming a run takes that run's facts;
-    a machine-learning model has no class under rule 1 (unknown)."""
+def evidence_type(m: dict, runs: list[dict] | None = None, rule: int = EVIDENCE_RULE) -> str:
+    """With an experiments table (v4), a mention naming a model run takes that
+    run's facts. A machine-learning model has no class (unknown); an idealized
+    one (quasi-geostrophic, shallow-water, dry...) is idealized_model (rule 2)."""
     if m.get("evidence") == "model" and runs is not None:
         r = find_run(runs, mention_experiment(m))
         if r and r.get("kind", "model_run") == "model_run":
             f = run_facts(r)
             if f["family"] == "machine_learning":
                 return "unknown"
-            return evidence_type({**m, "run": "", "experiment_name": "", "experiment": f})
-    return _evidence_type_v3(m)
+            if f["family"] == "idealized":
+                return "idealized_model" if rule >= 2 else "unknown"
+            return evidence_type({**m, "run": "", "experiment_name": "", "experiment": f}, rule=rule)
+    return _evidence_type_v3(m, rule)
 
 
-def _evidence_type_v3(m: dict) -> str:
-    """The record's evidence type from the model's facts (rule 1, Mark 23 Nov 2026):
-    a deep-convection scheme -> parametrized_model, whatever the grid spacing;
-    otherwise grid spacing <= 500 m -> les, else cpm (no upper bound: grey-zone
-    runs keep their spacing and can be filtered); missing facts -> unknown.
-    Several grid spacings that fall in different classes -> mixed."""
+def evidence_inferred(m: dict, runs: list[dict] | None = None) -> bool:
+    """The class comes from rule 2's inference (scheme not stated, coarser than 10 km)."""
+    return evidence_type(m, runs) != evidence_type(m, runs, rule=1) and \
+        evidence_type(m, runs) in ("parametrized_model", "mixed")
+
+
+def _evidence_type_v3(m: dict, rule: int = EVIDENCE_RULE) -> str:
+    """The record's evidence type from the model's facts.
+    Rule 1 (Mark, 23 Nov 2026): a deep-convection scheme -> parametrized_model,
+    whatever the grid spacing; otherwise grid spacing <= 500 m -> les, else cpm
+    (no upper bound: grey-zone runs keep their spacing and can be filtered);
+    missing facts -> unknown. Several grid spacings that fall in different
+    classes -> mixed.
+    Rule 2 (Mark, 25 Nov 2026): as rule 1, but a run whose scheme is not stated
+    and whose grid spacing is coarser than 10 km is parametrized_model: in
+    practice such runs parametrize deep convection unless the paper says it is
+    explicit (which is 'no' here). Records mark it as inferred."""
     ev = m.get("evidence")
     if ev != "model":
         return ev if ev in EVIDENCE_TYPES else "unknown"
     e = m.get("experiment") or {}
     param = e.get("deep_convection_parametrized")
     dxs = grid_spacings_m(e.get("resolution"))
-    classes = {_model_class(param, dx) for dx in dxs} or {_model_class(param, None)}
+    classes = {_model_class(param, dx, rule) for dx in dxs} or {_model_class(param, None, rule)}
     return classes.pop() if len(classes) == 1 else "mixed"
 
 

@@ -508,7 +508,9 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
     "runs_missed": {"type": "array", "items": {"type": "string"}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 4}   # mentions 4: grades the runs table (v4) too
+JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 5}   # mentions 4: grades the experiments table (v4) too;
+# 5: evidence rule 2 (coarser than 10 km and not stated -> parametrized; idealized_model)
+JUDGE_EVIDENCE_RULE = {4: 1, 5: 2}   # the evidence rule each mentions judge version labels by (older: 1)
 
 
 def _mention_line(n, m, runs=None) -> str:
@@ -574,9 +576,13 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "premise or method choice taken as given); speculation (offered without support here). The paper's "
                 "own result compared with cited work is shown.\n"
                 "   evidence_type: observations; reanalysis; les, cpm or parametrized_model for a model run (a "
-                "deep-convection scheme makes it parametrized_model at any grid spacing; otherwise les if "
-                "the grid spacing is 500 m or less, cpm if more); theory; mixed; unknown (the paper "
-                "doesn't say, or a model run's scheme or grid spacing isn't stated).\n"
+                "deep-convection scheme makes it parametrized_model at any grid spacing; a run coarser than "
+                "10 km whose scheme isn't stated is parametrized_model too, unless the paper says convection "
+                "is explicit; otherwise, with convection explicit, les if the grid spacing is 500 m or less, "
+                "cpm if more); idealized_model for a simplified dynamical model (quasi-geostrophic, "
+                "shallow-water, dry or two-layer, conceptual); theory; mixed; unknown (the paper doesn't "
+                "say, a machine-learning model, or a run at 10 km or finer whose scheme isn't stated, or "
+                "whose grid spacing isn't stated).\n"
                 "   hedging: strong (shows, demonstrates); moderate (suggests, indicates, likely); weak (may, "
                 "could, possibly): how firmly the paper states it.\n"
                 "   standalone: is the statement understandable without the paper?\n"
@@ -733,6 +739,7 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
     cases = {r["key"]: r for r in load(eval_path)}
     jp = judgments_path(run_dir, judge_with)
     jud = {r["id"]: r["judgment"] for r in load(jp)} if jp.exists() else {}
+    jver = {r["id"]: r.get("judge_prompt_version") for r in load(jp)} if jp.exists() else {}
     if judge_with != "claude":
         meta = {**meta, "judge": (meta.get("judges") or {}).get(judge_with)}
     rows = []
@@ -771,9 +778,15 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
                 row["calls_at_cap"] = sum(len((o or {}).get("mentions") or []) >= claims.MAX_ITEMS
                                           for o in r["parts"])
                 row["_table"] = out.get("runs") or []
-                evs = [claims.evidence_type(m, out.get("runs")) if "evidence" in m else m.get("evidence_type")
-                       for m in ms]
+                # labelled by the rule the judge used, so the two are compared like for like
+                rule = JUDGE_EVIDENCE_RULE.get(jver.get(jid), 1) if jid in jver else claims.EVIDENCE_RULE
+                evs = [claims.evidence_type(m, out.get("runs"), rule=rule) if "evidence" in m
+                       else m.get("evidence_type") for m in ms]
+                row["evidence_rule"] = rule
                 row["evidence_unknown"] = sum(e == "unknown" for e in evs)
+                now = [claims.evidence_type(m, out.get("runs")) for m in ms if "evidence" in m]
+                row["evidence_unknown_now"] = sum(e == "unknown" for e in now)       # under the current rule
+                row["evidence_inferred"] = sum(claims.evidence_inferred(m, out.get("runs")) for m in ms)
                 row["model_labels"] = [{"claim_type": m.get("claim_type"), "evidence_type": e,
                                         "hedging": m.get("hedging")} for m, e in zip(ms, evs)]
             else:
@@ -939,6 +952,10 @@ def summarize(task, rows) -> dict:
         s["calls"] = sum(r["calls"] for r in rows)
         s["calls_at_cap"] = sum(r.get("calls_at_cap", 0) for r in rows)
         s["evidence_unknown"] = round(sum(r.get("evidence_unknown", 0) for r in rows) / max(1, n), 3)
+        s["evidence_rule"] = sorted({r["evidence_rule"] for r in rows if "evidence_rule" in r})
+        s[f"evidence_unknown_rule{claims.EVIDENCE_RULE}"] = round(sum(r.get("evidence_unknown_now", 0) for r in rows)
+                                                              / max(1, n), 3)
+        s["evidence_inferred"] = round(sum(r.get("evidence_inferred", 0) for r in rows) / max(1, n), 3)
         ev = [tuple(x) for r in j for x in r.get("evidence_type_pairs", [])]
         s["evidence_unknown_judge"] = round(sum(b == "unknown" for _, b in ev) / len(ev), 3) if ev else None
         jr = [r for r in j if "run_verdicts" in r]
