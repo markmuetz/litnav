@@ -387,9 +387,10 @@ def grounded(quote: str, chunk_text: str) -> bool:
 # ---- evidence type, by rule (EVIDENCE_RULE; the thresholds live here, not in the prompt)
 
 _UNITS = {"m": 1.0, "metres": 1.0, "meters": 1.0, "km": 1000.0, "kilometres": 1000.0, "kilometers": 1000.0,
-          "deg": 111_000.0, "degree": 111_000.0, "degrees": 111_000.0, "°": 111_000.0}
+          "deg": 111_000.0, "degree": 111_000.0, "degrees": 111_000.0, "°": 111_000.0,
+          "◦": 111_000.0, "º": 111_000.0, "˚": 111_000.0}     # look-alikes PDFs give for the degree sign
 _SPACING = re.compile(r"(\d+(?:\.\d+)?|\d*\.\d+)\s*(?:(?:[-–]|to|and)\s*(\d+(?:\.\d+)?)\s*)?"
-                      r"(kilometres|kilometers|km|metres|meters|m|degrees|degree|deg|°)(?![a-z])", re.IGNORECASE)
+                      r"(kilometres|kilometers|km|metres|meters|m|degrees|degree|deg|°|◦|º|˚)(?![a-z])", re.IGNORECASE)
 
 
 def grid_spacings_m(text: str | None) -> list[float]:

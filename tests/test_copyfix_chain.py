@@ -190,3 +190,9 @@ def test_evidence_rule_2():
     assert C.evidence_type(x, [qg]) == "idealized_model" and C.evidence_type(x, [qg], rule=1) == "unknown"
     gcm = {**RUN, "name": "CAM", "horizontal_grid_spacing": "0.9 degrees", "components": []}
     assert C.evidence_type({**x, "experiment_name": "CAM"}, [gcm]) == "parametrized_model"
+
+
+def test_degree_sign_look_alikes():
+    from litnav import claims as C
+    assert C.grid_spacings_m("~ 0.9◦ latitude and 1.25◦ longitude") == [0.9 * 111_000, 1.25 * 111_000]
+    assert C.grid_spacing_m("1º") == 111_000 and C.grid_spacing_m("T63") is None    # spectral: converted later
