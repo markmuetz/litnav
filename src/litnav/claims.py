@@ -24,8 +24,9 @@ import json
 import re
 import secrets
 
-PROMPT_VERSION = 6              # v4: an experiments table per paper; v5: a sharper "shown", shown model claims
-SCHEMA_VERSION = "0.5"          # name their entry, "standard physics" marks schemes used; v6: cites
+PROMPT_VERSION = 7              # v4: an experiments table per paper; v5: a sharper "shown", shown model claims
+SCHEMA_VERSION = "0.6"          # name their entry; v6: cites; v7: the table is lean (anchors only: framework v2,
+                                # scheme detail moves to the model-configuration topic pass)
 EVIDENCE_RULE = 2               # evidence_type() below; rule 1 Mark 23 Nov 2026, rule 2 Mark 25 Nov 2026
 LES_MAX_M = 500                 # grid spacing at or below this, with no deep-convection scheme: les
 PARAM_MIN_M = 10_000            # rule 2: coarser than this, scheme not stated -> parametrized (inferred)
@@ -144,62 +145,40 @@ RUNS_SYSTEM = (
     "models and observations. You see the paper's title and abstract, then numbered passages from its "
     "methods, data and model description. List each distinct experiment the paper itself makes (not those "
     "of other work it only cites): each model run or set of runs, and each observational analysis (an "
-    "analysis of observations, reanalysis or archived model output). For each:\n"
+    "analysis of observations, reanalysis or archived model output). This table is an index: other passes "
+    "add the detail later, so keep each entry short. For each:\n"
     "- kind: model_run or observational_analysis. name: the paper's own name for it, as written (e.g. "
     "'295dT1p25', 'CTRL', 'N2560 GAL9'); if it has none, a short description ('the 2.2 km "
     "convection-permitting run', 'the CloudSat compositing analysis').\n"
     "- region, period: as written ('' if not stated).\n"
-    "- method: for an observational analysis, how the data are analysed, as written (e.g. 'tracking with "
-    "PyFLEXTRKR', 'compositing on rain rate', 'a 10 mm/h threshold'); method_cited: the reference given for "
-    "it ('' if none). '' for a model run unless it is analysed in a named way.\n"
-    "- datasets: for an observational analysis, each dataset it uses: name and version as written (e.g. "
-    "'CloudSat 2B-GEOPROF', 'R05'; 'ERA5', ''); kind (" + ", ".join(DATASET_KINDS) + "); resolution as "
-    "written ('' if not stated); chunk: the id of the passage that names it. A model run's forcing or "
-    "evaluation data can be listed too. An empty list if none.\n"
-    "- For a model run (all '' or unknown, and components an empty list, for an observational analysis): "
-    "model, version, configuration: as written ('' if not stated), e.g. 'Met Office Unified Model', "
-    "'vn11.1', 'RA2T'. configuration_cited: the reference the paper gives for the configuration (author and "
-    "year as written), '' if none. family: physical (a full numerical weather or climate model, LES or CRM), "
-    "idealized (a simplified dynamical model: quasi-geostrophic, shallow-water, a dry or two-layer model, a "
-    "conceptual or toy model), machine_learning (a data-driven model such as GraphCast), hybrid, or unknown. horizontal_grid_spacing, vertical_levels: "
-    "as written ('' if not stated). domain: global, limited_area, idealized, single_column or unknown. "
-    "coupling: atmosphere_only, coupled or unknown; ocean_model as written ('' if none).\n"
-    "- components, for a model run: one entry for each kind: " + ", ".join(COMPONENT_KINDS) + ". For each: "
-    "state used (the run has such a scheme), off (the paper says it is switched off or resolved "
-    "explicitly), or not_stated (the paper doesn't say: don't guess from what such models usually have); "
-    "scheme: its name as written ('' if not stated); moments: for microphysics, the number of moments if "
-    "stated ('' otherwise); chunk: the id of the passage that says so ('' if not stated).\n"
-    "Look for phrases that say the physics in general: 'the standard physics', 'the default physics "
-    "package', 'the full physics', 'physics as in the operational model', 'the standard configuration "
-    "(e.g. GA7.1, RA2T) is used'. They mean the model's usual schemes are on: mark the components the "
-    "model normally has as used, with scheme '' unless named, and the passage that says so. Deep "
-    "convection is the exception: mark it used from such a phrase only if the run is not called "
-    "convection-permitting, storm-resolving, cloud-resolving or explicit, and the paper doesn't say the "
-    "convection scheme is switched off; otherwise follow what the paper says about it. A run whose "
-    "deep convection is not described is not_stated, even if the paper calls it "
-    "convection-permitting, storm-resolving or km-scale: say it in name, not in the components. A paper "
-    "with neither (pure theory, a review) has an empty list. Reply with JSON only.")
+    "- For an observational analysis: datasets: each dataset it uses, name and version as written (e.g. "
+    "'CloudSat 2B-GEOPROF', 'R05'; 'ERA5', ''), its kind (" + ", ".join(DATASET_KINDS) + ") and the passage "
+    "that names it; method: how the data are analysed, in a few words (e.g. 'tracking with PyFLEXTRKR'). "
+    "For a model run, datasets is an empty list and method ''.\n"
+    "- For a model run ('' or unknown for an observational analysis): model and configuration as written "
+    "(e.g. 'Met Office Unified Model', 'RA2T'); family: physical (a full numerical weather or climate model, "
+    "LES or CRM), idealized (a simplified dynamical model: quasi-geostrophic, shallow-water, a dry or "
+    "two-layer model, a conceptual or toy model), machine_learning (a data-driven model such as GraphCast), "
+    "hybrid, or unknown; horizontal_grid_spacing: as written, in whatever form the paper uses (e.g. '2.2 "
+    "km', '0.25 degrees', 'T127', 'N2560', 'C384'); deep_convection: used (the run has a deep-convection "
+    "scheme, including when the paper says the standard or full physics of a model run at a coarse "
+    "resolution is used), off (the paper says convection is explicit or the scheme is switched off), or "
+    "not_stated (don't guess); deep_convection_chunk: the passage that says so ('' if not stated). A run the "
+    "paper calls convection-permitting, storm-resolving or km-scale without saying how deep convection is "
+    "handled is not_stated: put the name in name.\n"
+    "A paper with neither (pure theory, a review) has an empty list. Reply with JSON only.")
 
 
 def runs_schema(ids: list[str]) -> dict:
     s = {"type": "string"}
     chunk = {"type": "string", "enum": ids + [""]}
-    comp = {"type": "object", "additionalProperties": False,
-            "required": ["kind", "state", "scheme", "moments", "chunk"],
-            "properties": {"kind": {"type": "string", "enum": COMPONENT_KINDS},
-                           "state": {"type": "string", "enum": COMPONENT_STATES},
-                           "scheme": s, "moments": s, "chunk": chunk}}
-    ds = {"type": "object", "additionalProperties": False, "required": ["name", "version", "kind", "resolution",
-                                                                          "chunk"],
-          "properties": {"name": s, "version": s, "kind": {"type": "string", "enum": DATASET_KINDS},
-                         "resolution": s, "chunk": chunk}}
+    ds = {"type": "object", "additionalProperties": False, "required": ["name", "version", "kind", "chunk"],
+          "properties": {"name": s, "version": s, "kind": {"type": "string", "enum": DATASET_KINDS}, "chunk": chunk}}
     fields = {"kind": {"type": "string", "enum": EXPERIMENT_KINDS}, "name": s, "region": s, "period": s,
-              "method": s, "method_cited": s, "datasets": {"type": "array", "items": ds},
-              "model": s, "version": s, "configuration": s, "configuration_cited": s,
-              "family": {"type": "string", "enum": MODEL_FAMILIES},
-              "horizontal_grid_spacing": s, "vertical_levels": s,
-              "domain": {"type": "string", "enum": DOMAINS}, "coupling": {"type": "string", "enum": COUPLINGS},
-              "ocean_model": s, "components": {"type": "array", "items": comp}}
+              "datasets": {"type": "array", "items": ds}, "method": s,
+              "model": s, "configuration": s, "family": {"type": "string", "enum": MODEL_FAMILIES},
+              "horizontal_grid_spacing": s,
+              "deep_convection": {"type": "string", "enum": COMPONENT_STATES}, "deep_convection_chunk": chunk}
     ex = {"type": "object", "additionalProperties": False, "properties": fields, "required": list(fields)}
     return {"type": "object", "additionalProperties": False, "required": ["experiments"],
             "properties": {"experiments": {"type": "array", "maxItems": MAX_RUNS, "items": ex}}}
@@ -222,7 +201,11 @@ def mention_experiment(m: dict) -> str:
 
 
 def component(run: dict, kind: str) -> dict:
-    """A run's component of one kind (not_stated if the reply left it out)."""
+    """A run's component of one kind (not_stated if the reply left it out). A lean
+    table (v7) gives deep convection as its own field."""
+    if kind == "deep_convection" and "deep_convection" in run:
+        return {"kind": kind, "state": run["deep_convection"], "scheme": "", "moments": "",
+                "chunk": run.get("deep_convection_chunk", "")}
     for c in run.get("components") or []:
         if c.get("kind") == kind:
             return c

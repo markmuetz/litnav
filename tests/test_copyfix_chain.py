@@ -211,3 +211,18 @@ def test_cites_kept_and_shown_to_the_judge():
     assert "cites 'Davis (2015)'" in prompt and "cites_ok, where the claim shows cites" in prompt
     old = P.judge_prompt("mentions", it, "text", [], {"mentions": [{k: v for k, v in m.items() if k != "cites"}]})
     assert "cites_ok: not_given" in old
+
+
+def test_lean_experiments_table_v7():
+    """Framework v2: the general pass's table is an index; deep convection is one field."""
+    from litnav import claims as C, copyfix
+    props = C.runs_schema(["k#1"])["properties"]["experiments"]["items"]["properties"]
+    assert "components" not in props and "deep_convection" in props and "coupling" not in props
+    lean = {"kind": "model_run", "name": "CTRL", "model": "UM", "configuration": "RA2T", "family": "physical",
+            "horizontal_grid_spacing": "2.2 km", "deep_convection": "off", "deep_convection_chunk": "k#1",
+            "region": "", "period": "", "datasets": [], "method": ""}
+    gcm = {**lean, "name": "GCM", "horizontal_grid_spacing": "N96", "deep_convection": "used"}
+    m = {"evidence": "model", "experiment_name": "CTRL", "experiment": {}}
+    assert C.evidence_type(m, [lean, gcm]) == "cpm"
+    assert C.evidence_type({**m, "experiment_name": "GCM"}, [lean, gcm]) == "parametrized_model"
+    assert "model run 'CTRL': UM, RA2T, 2.2 km; deep convection: off" in copyfix.runs_table([lean])

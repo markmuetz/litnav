@@ -248,6 +248,9 @@ def runs_table(runs: list[dict]) -> str:
             f"{c.get('kind', '').replace('_', ' ')}: "
             + ({"off": "off", "not_stated": "not stated"}.get(c.get("state"), c.get("scheme") or "used"))
             for c in r.get("components") or [])
+        if "deep_convection" in r:              # the lean table (v7)
+            comps = "deep convection: " + {"off": "off", "not_stated": "not stated"}.get(r["deep_convection"],
+                                                                                       "used")
         head = ", ".join(x for x in (r.get("model"), r.get("configuration"), r.get("horizontal_grid_spacing"),
                                      r.get("domain")) if x)
         lines.append(f"- model run '{name}': {head}" + (f"; {comps}" if comps else ""))
