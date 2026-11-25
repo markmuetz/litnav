@@ -196,3 +196,18 @@ def test_degree_sign_look_alikes():
     from litnav import claims as C
     assert C.grid_spacings_m("~ 0.9◦ latitude and 1.25◦ longitude") == [0.9 * 111_000, 1.25 * 111_000]
     assert C.grid_spacing_m("1º") == 111_000 and C.grid_spacing_m("T63") is None    # spectral: converted later
+
+
+def test_cites_kept_and_shown_to_the_judge():
+    from types import SimpleNamespace
+    from litnav import claims as C, papereval as P
+    m = {"statement": "Cold pools trigger new cells.", "claim_type": "restated", "cites": "Davis (2015)",
+         "evidence": "model", "chunk": "k#1"}
+    recs, _ = C.records("k", [{"mentions": [m]}], {})
+    assert recs[0]["cites"] == "Davis (2015)"
+    assert "cites" in C.schema(["k#1"])["properties"]["mentions"]["items"]["required"]
+    it = SimpleNamespace(title="T", year=2020)
+    prompt = P.judge_prompt("mentions", it, "text", [{"id": "k1", "point": "p"}], {"mentions": [m]})
+    assert "cites 'Davis (2015)'" in prompt and "cites_ok, where the claim shows cites" in prompt
+    old = P.judge_prompt("mentions", it, "text", [], {"mentions": [{k: v for k, v in m.items() if k != "cites"}]})
+    assert "cites_ok: not_given" in old

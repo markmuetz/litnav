@@ -497,6 +497,7 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
         "evidence_type": {"type": "string", "enum": claims.EVIDENCE_TYPES},
         "hedging": {"type": "string", "enum": claims.HEDGING},
         "standalone": {"type": "boolean"},
+        "cites_ok": {"type": "string", "enum": ["right", "wrong", "missing", "none_needed", "not_given"]},
         "note": {"type": "string"}},
         "required": ["n", "verdict", "claim_type", "evidence_type", "hedging", "standalone", "note"]}},
     "key_points_covered": {"type": "object", "additionalProperties": {"type": "array",
@@ -508,9 +509,9 @@ MENTIONS_JUDGE = {"type": "object", "properties": {
     "runs_missed": {"type": "array", "items": {"type": "string"}}},
     "required": ["claims", "key_points_covered"]}
 JUDGE_SCHEMA = {"summary": SUMMARY_JUDGE, "extract": EXTRACT_JUDGE, "mentions": MENTIONS_JUDGE}
-JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 5}   # mentions 4: grades the experiments table (v4) too;
-# 5: evidence rule 2 (coarser than 10 km and not stated -> parametrized; idealized_model)
-JUDGE_EVIDENCE_RULE = {4: 1, 5: 2}   # the evidence rule each mentions judge version labels by (older: 1)
+JUDGE_VERSION = {"summary": 2, "extract": 1, "mentions": 6}   # mentions 4: grades the experiments table (v4) too;
+# 5: evidence rule 2 (coarser than 10 km and not stated -> parametrized; idealized_model); 6: grades cites
+JUDGE_EVIDENCE_RULE = {4: 1, 5: 2, 6: 2}   # the evidence rule each mentions judge version labels by (older: 1)
 
 
 def _mention_line(n, m, runs=None) -> str:
@@ -520,6 +521,7 @@ def _mention_line(n, m, runs=None) -> str:
     bits = [f"chunk {m.get('chunk')}", f"source {m.get('source')}", f"claim_type {m.get('claim_type')}",
             f"evidence_type {claims.evidence_type(m, runs) if 'evidence' in m else m.get('evidence_type')}",
             *([f"experiment '{claims.mention_experiment(m)}'"] if claims.mention_experiment(m) else []),
+            *([f"cites '{m['cites']}'"] if "cites" in m else []),
             f"hedging {m.get('hedging')}" + (f" ('{m['hedge_words']}')" if m.get("hedge_words") else "")]
     cond = "; ".join(f"{k} {x}" for k, x in {**e, **c}.items() if x and k not in ("run_name",))
     if cond:
@@ -586,7 +588,11 @@ def judge_prompt(task, it, text, kps, out) -> str:
                 "   hedging: strong (shows, demonstrates); moderate (suggests, indicates, likely); weak (may, "
                 "could, possibly): how firmly the paper states it.\n"
                 "   standalone: is the statement understandable without the paper?\n"
-                "2. key_points_covered: for each key point id, the numbers of the claims that convey it "
+                + ("   cites_ok, where the claim shows cites: right (the citations the paper attaches to this "
+                   "claim), wrong (a different or extra work), missing (the paper cites work for it but cites "
+                   "is empty or incomplete), none_needed (empty, and the paper cites nothing for it).\n"
+                   if any("cites" in m for m in out.get("mentions") or []) else "   cites_ok: not_given.\n")
+                + "2. key_points_covered: for each key point id, the numbers of the claims that convey it "
                 "(an empty list if none).\n"
                 + ("3. runs: for each entry Rn of the experiments table: verdict correct (every field, "
                    "component and dataset matches the paper), wrong_detail (some differ: list them in wrong, "
@@ -825,6 +831,8 @@ def report(lib, eval_path: Path, run_dir: Path, judge_with: str = "claude") -> d
                     row[f"{f}_pairs"] = [[labels[x["n"] - 1][f], x.get(f)] for x in items or []
                                          if isinstance(x.get("n"), int) and 0 < x["n"] <= len(labels)]
                 row["standalone"] = sum(bool(x.get("standalone")) for x in items or [])
+                row["cites_ok"] = dict(Counter(x.get("cites_ok") for x in items or []
+                                               if x.get("cites_ok") not in (None, "not_given")))
                 table = row.pop("_table", None) or []
                 if "runs" in jd:                   # v4: the judge graded the experiments table
                     row["run_verdicts"] = dict(Counter(x.get("verdict") for x in jd.get("runs") or []))
@@ -958,6 +966,11 @@ def summarize(task, rows) -> dict:
         s["evidence_inferred"] = round(sum(r.get("evidence_inferred", 0) for r in rows) / max(1, n), 3)
         ev = [tuple(x) for r in j for x in r.get("evidence_type_pairs", [])]
         s["evidence_unknown_judge"] = round(sum(b == "unknown" for _, b in ev) / len(ev), 3) if ev else None
+        ck = sum((Counter(r.get("cites_ok") or {}) for r in j), Counter())
+        if ck:                                   # v6: citations on mentions
+            judged = sum(ck.values())
+            s["cites"] = {"judged": judged, **dict(ck),
+                          "accuracy": round((ck["right"] + ck["none_needed"]) / judged, 3)}
         jr = [r for r in j if "run_verdicts" in r]
         if jr:                                   # the runs table (v4)
             tot = Counter()

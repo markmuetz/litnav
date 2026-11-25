@@ -24,8 +24,8 @@ import json
 import re
 import secrets
 
-PROMPT_VERSION = 5              # v4: an experiments table per paper; v5: a sharper "shown", shown model claims
-SCHEMA_VERSION = "0.4"          # name their entry, "standard physics" marks schemes used
+PROMPT_VERSION = 6              # v4: an experiments table per paper; v5: a sharper "shown", shown model claims
+SCHEMA_VERSION = "0.5"          # name their entry, "standard physics" marks schemes used; v6: cites
 EVIDENCE_RULE = 2               # evidence_type() below; rule 1 Mark 23 Nov 2026, rule 2 Mark 25 Nov 2026
 LES_MAX_M = 500                 # grid spacing at or below this, with no deep-convection scheme: les
 PARAM_MIN_M = 10_000            # rule 2: coarser than this, scheme not stated -> parametrized (inferred)
@@ -82,6 +82,10 @@ SYSTEM = (
     "studies' experiments and results, even when described at length (restated); the paper's own "
     "set-up and choices (assumed). Ask: would this sentence still be true if the paper's results had "
     "come out differently? If so, it is not shown.\n"
+    "- cites: the citations the passage gives for this claim, as written ('Davis (2015)', 'Houze et al., "
+    "2004; Schumacher 2017', '[9-12]'); for a restated claim, the work it is attributed to; for a shown claim "
+    "compared with cited work, that work. '' if the passage cites nothing for it. Only citations attached "
+    "to this claim in the passage, never ones from elsewhere in the paper.\n"
     "- evidence: what the claim rests on (for a restated claim, the cited work's): observations, "
     "reanalysis, model (any numerical simulation), theory, mixed, or unknown if the passages don't say: "
     "don't guess.\n"
@@ -116,6 +120,7 @@ def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
             "claim_type": {"type": "string", "enum": CLAIM_TYPES},
             "evidence": {"type": "string", "enum": EVIDENCE_KINDS},
             "experiment_name": s,
+            "cites": s,
             "experiment": {"type": "object", "properties": {
                 "model": s, "resolution": s, "method": s,
                 "deep_convection_parametrized": {"type": "string", "enum": YNU}, "run_name": s},
@@ -129,7 +134,7 @@ def schema(ids: list[str], max_items: int = MAX_ITEMS) -> dict:
             "hedge_words": s,
             "value": {"type": "object", "properties": {"value": s, "units": s, "low": s, "high": s},
                       "required": ["value", "units", "low", "high"], "additionalProperties": False}},
-        "required": ["statement", "chunk", "quote", "source", "claim_type", "evidence", "experiment_name", "experiment",
+        "required": ["statement", "chunk", "quote", "source", "claim_type", "cites", "evidence", "experiment_name", "experiment",
                      "conditions", "hedging", "hedge_words", "value"],
         "additionalProperties": False}}}, "required": ["mentions"], "additionalProperties": False}
 
@@ -379,6 +384,7 @@ def records(key: str, replies: list[dict], chunk_info: dict, *, run: str = "",
                 "evidence_rule": EVIDENCE_RULE, "evidence_inferred": evidence_inferred(m, runs),
                 "evidence": m.get("evidence"),
                 "experiment_name": entry_name(find_run(runs, mention_experiment(m)) or {}),
+                "cites": m.get("cites", ""),       # as written; resolving to reference keys is later work
                 "experiment": {**(m.get("experiment") or {}),
                                "grid_spacing_m": grid_spacing_m((m.get("experiment") or {}).get("resolution"))},
                 "conditions": m.get("conditions") or {},
