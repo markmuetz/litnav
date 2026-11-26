@@ -9,6 +9,18 @@ licensed_to_models = true). Bibliographic files (ref.bib, meta.toml) and
 model-written summaries stay readable, and `litnav ...` commands pass: they
 apply the same rules themselves.
 
+Three tiers for shell commands that touch a protected file:
+- allowed: commands that show names, sizes or hashes, never text (META), and
+  moving or deleting files within the library (MANAGE);
+- deny: anything that could read a known paper that may not go to a model
+  (licensed or confidential): reading it (READERS, recursive searches, the Read
+  and Grep tools), copying or moving it out of the library, or a command the
+  guard can't classify. Never "ask": the user's licences decide, not a prompt;
+- ask: the same for a file whose sharing the guard can't tell (a PDF in the
+  PDF folder with no library item: the inbox, _variants/, a stray file). The
+  user approves or refuses it in Claude Code's permission prompt, which the
+  agent can't answer.
+
 It is a guard against accidents, not a sandbox: a shell can always find
 another way in (a script, an archive, a copy). Hook config:
 
@@ -29,7 +41,19 @@ from . import sharing as S
 # files in papers/<key>/ that are metadata or model-written, not the paper's words
 OPEN_FILES = {"ref.bib", "meta.toml", "summary.json", "abstract.json"}
 RECURSIVE = {"rg", "grep", "egrep", "fgrep", "ag", "ack", "find", "fd", "tar", "zip", "rsync", "cp",
-             "scp", "du", "pdftotext", "pdfgrep", "xargs"}
+             "scp", "pdftotext", "pdfgrep", "xargs"}
+# show names, sizes, dates or hashes, never a file's words
+META = {"ls", "stat", "cmp", "shasum", "sha256sum", "sha1sum", "md5", "md5sum", "du", "test", "[", "file",
+        "realpath", "basename", "dirname"}
+# file management: no text is shown; moving a protected file out of the library asks the user
+MANAGE = {"mv", "rm", "mkdir", "rmdir", "touch", "cp"}
+# known to print a file's content (or to search it): denied for protected files
+READERS = {"cat", "head", "tail", "less", "more", "bat", "tac", "nl", "pdftotext", "pdftoppm", "pdfinfo",
+           "pdfimages", "pdftohtml", "pdfgrep", "mutool", "qpdf", "strings", "grep", "egrep", "fgrep",
+           "rg", "ag", "ack", "sed", "awk", "cut", "sort", "uniq", "diff", "xxd", "od", "hexdump", "base64",
+           "tr", "wc", "find", "fd", "tar", "zip", "unzip", "gzip", "rsync", "scp", "xargs", "open",
+           "xdg-open", "tee", "split", "iconv", "jq", "column", "fold", "fmt", "paste", "join", "comm",
+           "ugrep", "pandoc", "textutil", "mdls", "convert", "magick", "gs", "tesseract", "curl", "nc"}
 SPLIT = re.compile(r"(\|\||&&|[;|&\n])")
 SAFE_LEAD = {"litnav"}
 # Opening a PDF in the user's viewer shows it to them, not to the agent: allowed,
@@ -109,21 +133,57 @@ class Guard:
 
     # -- tools
 
-    def check(self, tool: str, inp: dict, cwd: str | None = None) -> str | None:
+    def check(self, tool: str, inp: dict, cwd: str | None = None) -> tuple[str, str] | None:
+        """("deny" | "ask", reason), or None to let the call through."""
         base = Path(cwd or os.getcwd())
+        deny = lambda r: ("deny", r) if r else None       # noqa: E731
         if tool == "Read":
             f = inp.get("file_path")
-            return self.path_reason(base / os.path.expanduser(f)) if f else None
+            return deny(self.path_reason(base / os.path.expanduser(f))) if f else None
         if tool == "Grep":
             f = os.path.expanduser(inp.get("path") or str(base))
-            return self.path_reason(base / f, recursive=True)
+            return deny(self.path_reason(base / f, recursive=True))
         if tool == "Bash":
             return self.bash_reason(inp.get("command", ""), base)
         return None
 
-    def bash_reason(self, command: str, base: Path) -> str | None:
+    def known_protected(self, p: Path) -> bool:
+        """Is `p` a file of a known paper that may not go to a model (not an unknown file)?"""
+        p = _real(p)
+        if _inside(p, self.papers) and p != self.papers:
+            k = p.relative_to(self.papers).parts[0]
+        elif _inside(p, self.pdfs) and p != self.pdfs and len(p.relative_to(self.pdfs).parts) == 1:
+            k = p.stem
+        else:
+            return False
+        k2 = self.lib.resolve(k)
+        return bool(k2) and not self.lib.get(k2).allowed(S.SEND_OUT)
+
+    def _level(self, paths: list[Path], reason: str) -> str:
+        return "deny" if any(self.known_protected(q) for q in paths) else "ask"
+
+    def _in_library(self, p: Path) -> bool:
+        p = _real(p)
+        return any(_inside(p, z) for z in self.zones)
+
+    def _manage(self, lead: str, paths: list[Path], recursive: bool) -> tuple[str, str] | None:
+        """mv/cp: a protected source going to a destination outside the library asks the user.
+        rm, mkdir, rmdir, touch show nothing and pass."""
+        if lead not in ("mv", "cp") or len(paths) < 2:
+            return None
+        dest, srcs = paths[-1], paths[:-1]
+        if self._in_library(dest):
+            return None
+        for src in srcs:
+            r = self.path_reason(src, recursive=recursive or lead == "mv")
+            if r:
+                return (self._level([src], r), f"{lead} would take a protected file out of the library ({r})")
+        return None
+
+    def bash_reason(self, command: str, base: Path) -> tuple[str, str] | None:
         parts = SPLIT.split(command)
         sep = ""
+        asked = None
         for i, seg in enumerate(parts):
             if i % 2:                                  # a separator
                 sep = seg
@@ -148,8 +208,12 @@ class Guard:
                 continue
             if _viewer_only(argv) and not piped:
                 continue
+            if lead in META and not (lead == "cmp" and any(
+                    a in ("--verbose", "--print-bytes") or re.match(r"^-\w*[lb]", a) for a in argv[1:])):
+                continue                               # cmp -l / -b print the bytes themselves
             recursive = lead in RECURSIVE and (lead not in ("grep", "egrep", "fgrep", "cp")
                                                or any(re.match(r"^-\w*[rR]", a) for a in argv[1:]))
+            paths, reason = [], None
             for tok in argv[1:]:
                 tok = tok.split("=", 1)[1] if tok.startswith("-") and "=" in tok else tok
                 if tok.startswith("-") or not tok:
@@ -160,22 +224,32 @@ class Guard:
                     cands = glob.glob(os.path.expanduser(tok if os.path.isabs(os.path.expanduser(tok))
                                                          else str(base / tok)))[:200] or []
                 for c in cands:
+                    paths.append(base / c)
                     if "/" not in c and not (base / c).exists() and c != ".":
                         continue
-                    r = self.path_reason(base / c, recursive=recursive)
-                    if r:
-                        return r
+                    reason = reason or self.path_reason(base / c, recursive=recursive)
+            if lead in MANAGE:
+                got = self._manage(lead, paths, recursive)
+                if got and got[0] == "deny":
+                    return got
+                asked = asked or got
+                continue
+            if reason:
+                if lead in READERS or piped or self._level(paths, reason) == "deny":
+                    return ("deny", reason)
+                asked = asked or ("ask", f"{lead} is not a command the guard knows, and it touches a "
+                                         f"file whose sharing the guard can't tell ({reason})")
             if recursive and len(argv) >= 1 and lead in ("rg", "ag", "ack", "fd", "find") and \
                     not (piped and lead in ("rg", "ag", "ack")) and \
                     not any(not a.startswith("-") for a in argv[2:]):
                 r = self.path_reason(base, recursive=True)       # searches the cwd
                 if r:
-                    return r
-        return None
+                    return ("deny", r)
+        return asked
 
 
 def hook(stdin_text: str, explicit_library=None) -> dict | None:
-    """Claude Code hook protocol: a deny decision, or None to let it through."""
+    """Claude Code hook protocol: a deny or ask decision, or None to let it through."""
     try:
         ev = json.loads(stdin_text or "{}")
     except json.JSONDecodeError:
@@ -186,9 +260,16 @@ def hook(stdin_text: str, explicit_library=None) -> dict | None:
         lib = Library(find_root(explicit_library, start=Path(ev["cwd"]) if ev.get("cwd") else None))
     except LibraryNotFound:
         return None                      # no library known: nothing to guard
-    reason = Guard(lib).check(ev.get("tool_name", ""), ev.get("tool_input") or {}, ev.get("cwd"))
-    if not reason:
+    got = Guard(lib).check(ev.get("tool_name", ""), ev.get("tool_input") or {}, ev.get("cwd"))
+    if not got:
         return None
+    decision, reason = got
+    if decision == "ask":
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "ask",
+            "permissionDecisionReason": (
+                f"litnav guard: {reason}. The user decides: approve only if no paper text that may "
+                "not go to a model will be read.")}}
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "deny",
         "permissionDecisionReason": (

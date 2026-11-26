@@ -638,3 +638,34 @@ def test_licences_from_arxiv_for_preprints(ilib):
     from litnav.library import Library
     it2 = Library(ilib.root).get("smith2021cold")
     assert it2.sharing == "open" and it2.meta["licence"]["source"] == "arxiv"
+
+
+def test_guard_tiers(ilib, tmp_path):
+    """Names, sizes and hashes pass; moving within the library passes; a known licensed paper is never
+    'ask' (read, copied out, or touched by an unknown command: deny); a file whose sharing the guard
+    can't tell is asked about (the user decides in the permission prompt)."""
+    lib = strict(ilib)
+    lib.pdf_dir.mkdir(parents=True, exist_ok=True)
+    lic = lib.pdf_dir / "smith2021cold.pdf"                 # a licensed paper's PDF
+    lic.write_bytes(b"%PDF a")
+    stray = lib.pdf_dir / "nokey2025stray.pdf"              # no library item: sharing unknown
+    stray.write_bytes(b"%PDF b")
+    (lib.pdf_dir / "_variants").mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    out.mkdir()
+    dec = lambda cmd: (_hook(lib, "Bash", {"command": cmd}) or {}).get(   # noqa: E731
+        "hookSpecificOutput", {}).get("permissionDecision")
+    t = lic.as_posix()
+    for cmd in [f"ls -la {lib.pdf_dir.as_posix()}", f"stat {t}", f"cmp {t} {stray.as_posix()}",
+                f"shasum -a 256 {t}", f"test -s {t} && echo yes", f"du -sh {lib.pdf_dir.as_posix()}",
+                f"mv -n {stray.as_posix()} {lib.pdf_dir.as_posix()}/_variants/x.pdf",
+                f"mv {t} {lib.pdf_dir.as_posix()}/_variants/smith.pdf", f"rm {stray.as_posix()}"]:
+        assert dec(cmd) is None, cmd
+    for cmd in [f"cat {t}", f"pdftotext {t} -", f"pdfinfo {t}", f"cp {t} {out.as_posix()}/",
+                f"mv {t} {out.as_posix()}/", f"python3 read.py {t}", f"somecmd {t}",
+                f"cat {lib.get('smith2021cold').text_path.as_posix()}"]:
+        assert dec(cmd) == "deny", cmd
+    for cmd in [f"cp {stray.as_posix()} {out.as_posix()}/", f"somecmd {stray.as_posix()}"]:
+        assert dec(cmd) == "ask", cmd
+    assert dec(f"cat {stray.as_posix()}") == "deny"          # a known reader is denied for any protected file
+    assert dec(f"cmp -l {t} {stray.as_posix()}") == "deny"   # prints the differing bytes
