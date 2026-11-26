@@ -257,8 +257,13 @@ litnav's commands apply these rules themselves. Inside an agent's shell
 An agent with a shell can still read `papers/<key>/text.txt` or run
 `pdftotext` on a PDF. The plugin's hook, `litnav guard`, refuses Read, Grep
 and Bash calls that touch the text or PDF of a paper that may not go to a
-model. `ref.bib`, `meta.toml` and `summary.json` stay readable. It catches
-accidents, not a determined agent, and it needs `litnav` on your PATH. If
+model. `ref.bib`, `meta.toml` and `summary.json` stay readable. Commands
+that show only names, sizes or hashes (`ls`, `stat`, `cmp`, `shasum`) pass, and
+so do moves and deletions within the library. Reading such a paper, copying it
+out of the library, or running a command the guard doesn't know on it is always
+refused. A file whose sharing the guard can't tell (a PDF in the PDF folder with
+no library item) is put to you instead, in Claude Code's permission prompt. It
+catches accidents, not a determined agent, and it needs `litnav` on your PATH. If
 you don't use the plugin, add it to `~/.claude/settings.json` yourself:
 
 ```json
