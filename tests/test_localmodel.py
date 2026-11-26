@@ -185,6 +185,8 @@ def test_guard(ilib):
     for k in ("smith2021cold", "jones2019gravity"):
         (lib.pdf_dir / f"{k}.pdf").write_bytes(b"%PDF")
     lic, opn = lib.get("smith2021cold"), lib.get("jones2019gravity")
+    elsewhere = lib.root.parent / "elsewhere"       # not /tmp: on Linux the test library is under /tmp
+    elsewhere.mkdir(exist_ok=True)
     deny = lambda r: r and r["hookSpecificOutput"]["permissionDecision"] == "deny"   # noqa: E731
     assert deny(_hook(lib, "Read", {"file_path": str(lic.text_path)}))
     assert _hook(lib, "Read", {"file_path": str(opn.text_path)}) is None
@@ -196,19 +198,19 @@ def test_guard(ilib):
     assert deny(_hook(lib, "Grep", {"pattern": "x"}))                      # cwd = the library
     for cmd in ["cat papers/smith2021cold/text.txt",
                 "head -5 papers/*/text.txt",
-                f"pdftotext {lib.pdf_dir}/smith2021cold.pdf -",
+                f"pdftotext {lib.pdf_dir.as_posix()}/smith2021cold.pdf -",
                 "rg cold",
                 "echo x | rg cold papers",
-                "cd /tmp && cd " + str(lib.root) + " && rg cold",
-                f"grep -rn cold {lib.root}",
-                "cd /tmp && cat " + str(lic.text_path),
-                "cat ~/" + str(lic.text_path.relative_to(Path.home())) if _under_home(lic.text_path)
-                else "cat " + str(lic.text_path)]:
+                "cd /tmp && cd " + lib.root.as_posix() + " && rg cold",
+                f"grep -rn cold {lib.root.as_posix()}",
+                "cd /tmp && cat " + lic.text_path.as_posix(),
+                "cat ~/" + lic.text_path.relative_to(Path.home()).as_posix() if _under_home(lic.text_path)
+                else "cat " + lic.text_path.as_posix()]:
         assert deny(_hook(lib, "Bash", {"command": cmd})), cmd
     for cmd in ["cat papers/smith2021cold/ref.bib", "git status", "litnav search 'cold pools'",
                 "cat papers/jones2019gravity/text.txt", "ls papers", "grep doi papers/smith2021cold/ref.bib",
                 "uv run pytest -q | rg 'assert|where'",            # rg reads the pipe, not the library
-                "cd /tmp && rg cold"]:                              # searches /tmp
+                f"cd {elsewhere.as_posix()} && rg cold"]:          # searches a folder outside the library
         assert _hook(lib, "Bash", {"command": cmd}) is None, cmd
     # with licensed text allowed to models, nothing licensed is blocked
     assert _hook(ilib, "Read", {"file_path": str(lic.text_path)}) is None or True
@@ -376,7 +378,7 @@ def test_model_profiles(ilib, tmp_path, monkeypatch):
 [local_model.profiles.orchid]
 url = "http://127.0.0.1:22310/v1"
 model = "qwen3-235b"
-api_key_file = "{tok}"
+api_key_file = '{tok.as_posix()}'
 context = 65536
 ''')
     assert lib.local_model["model"] == "fake-14b" and lib.local_model["profile"] == "default"
@@ -549,12 +551,14 @@ def test_guard_lets_a_pdf_be_opened_in_a_viewer(ilib):
     lib.pdf_dir.mkdir(parents=True, exist_ok=True)
     pdf = lib.pdf_dir / "smith2021cold.pdf"
     pdf.write_bytes(b"%PDF")
+    txt = lib.get("smith2021cold").text_path.as_posix()
+    pdf = pdf.as_posix()                              # commands are bash: POSIX paths, also on Windows
     deny = lambda r: r and r["hookSpecificOutput"]["permissionDecision"] == "deny"   # noqa: E731
     assert _hook(lib, "Bash", {"command": f"open {pdf}"}) is None
     assert _hook(lib, "Bash", {"command": f"open -a Preview {pdf} && echo opened"}) is None
     assert _hook(lib, "Bash", {"command": f"xdg-open {pdf}"}) is None
     for cmd in [f"open --stdout /tmp/x -a Preview {pdf}", f"open -a TextEdit {pdf}",
-                f"open -f {pdf}", f"open {pdf}; cat {pdf}", f"open {lib.get('smith2021cold').text_path}"]:
+                f"open -f {pdf}", f"open {pdf}; cat {pdf}", f"open {txt}"]:
         assert deny(_hook(lib, "Bash", {"command": cmd})), cmd
 
 

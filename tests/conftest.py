@@ -29,6 +29,35 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
 
 
+class OfflineEmbedder:
+    """Stands in for the real embedding model, which would be downloaded on first use (CI has no cache)."""
+    name = "offline"
+
+    def __init__(self, *a, **k):
+        pass
+
+    def _v(self, t):
+        import hashlib
+        import numpy as np
+        v = np.zeros(64, dtype="float32")
+        for w in t.lower().split():
+            v[int(hashlib.md5(w.strip('.,').encode()).hexdigest(), 16) % 64] += 1
+        return v
+
+    def docs(self, texts):
+        import numpy as np
+        return np.stack([self._v(t) for t in texts])
+
+    def query(self, t):
+        return self._v(t)
+
+
+@pytest.fixture(autouse=True)
+def offline_embedder(monkeypatch):
+    from litnav import embed
+    monkeypatch.setattr(embed, "Embedder", OfflineEmbedder)
+
+
 @pytest.fixture(autouse=True)
 def owner_shell(monkeypatch, tmp_path_factory):
     """Tests run as the owner at a terminal (not inside an agent's shell, even

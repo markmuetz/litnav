@@ -38,6 +38,8 @@ class Model(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def remote(tmp_path, monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("the fake cluster runs its commands in a POSIX bash; the spool's cluster side is Linux")
     home = tmp_path / "cluster-home"
     home.mkdir()
 
