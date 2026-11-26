@@ -227,3 +227,22 @@ def test_import_fetches_the_abstract_and_reads_the_licence_line(lib, pdfs, monke
     it = lib.get("smith2021cold")
     assert abstracts.read(it)["source"] == "openalex"
     assert it.sharing == "open" and it.meta["licence"]["source"] == "text"
+
+
+def test_a_pdf_already_in_the_folder_is_used_if_the_same_and_left_if_not(lib, pdfs):
+    """A PDF already under the new key's name used to stop the whole import after half-making the
+    item. The same file is now used; a different one leaves that row (and only it) undone."""
+    from litnav.util import sha256_file
+    p = pdfs("jas-d-20-0001.pdf", TEXT_A)
+    rows = importer.plan(lib, importer.inbox_files(lib), client=client(), log=lambda *a: None)
+    lib.pdf_dir.mkdir(parents=True, exist_ok=True)
+    (lib.pdf_dir / "smith2021cold.pdf").write_bytes(b"another file")
+    msgs = []
+    c = importer.apply(lib, rows, log=msgs.append)
+    assert c["left"] == 1 and not (lib.root / "papers" / "smith2021cold").exists() and p.exists()
+    assert any("differs" in m for m in msgs)
+    (lib.pdf_dir / "smith2021cold.pdf").write_bytes(p.read_bytes())
+    assert sha256_file(lib.pdf_dir / "smith2021cold.pdf") == rows[0]["sha256"]
+    c = importer.apply(lib, rows, log=lambda *a: None)
+    assert c["imported"] == 1 and lib.get("smith2021cold").has_pdf
+    assert not p.exists()                               # the inbox copy, a duplicate, is gone

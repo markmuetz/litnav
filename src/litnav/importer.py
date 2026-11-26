@@ -259,14 +259,26 @@ def apply(lib, rows, *, tags=(), mode: str | None = None, client=None, log=print
         if r["status"] == "ok":
             conf = r.get("confidential") == "yes"
             t = [x for x in [r.get("tag")] + list(tags) if x]
+            # a PDF already under the new key's name (saved by hand, or a run that stopped): the same
+            # file is used as it is; a different one is left alone, and so is this row, before
+            # anything is written
+            dest = lib.pdf_dir / f"{r['key']}.pdf"
+            same = dest.exists() and r.get("sha256") and sha256_file(dest) == r["sha256"]
+            if dest.exists() and not same:
+                counts["left"] += 1
+                log(f"  {r['key']}: {dest.name} is already in the PDF folder and differs from "
+                    f"{src.name}; nothing imported for it (rename one, or pass --key)")
+                continue
             it = lib.create_item(r["key"], r.get("bibtex") or None, tags=t,
                                  sharing_level="confidential" if conf else None)
             if conf:
                 it.add_tag("confidential")
-            dest = it.pdf_path
-            if dest.exists():
-                raise FileExistsError(f"{dest} exists but {r['key']} was a new item")
-            mover(str(src), str(dest))
+            if same:
+                if mover is shutil.move:
+                    src.unlink()
+                log(f"  {r['key']}: {dest.name} was already in the PDF folder (the same file); used as it is")
+            else:
+                mover(str(src), str(dest))
             m = it.meta
             m.setdefault("files", {})["pdf_sha256"] = r["sha256"]
             if r.get("arxiv"):
