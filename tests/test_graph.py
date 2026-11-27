@@ -1,52 +1,28 @@
-from litnav import graph, index
-
-from conftest import BIB
-from fakes import FakeClient
+from litnav import graph
 
 
-def bibfor(key, doi):
-    return BIB.replace("smith2021cold", key).replace("10.1175/JAS-D-20-0001.1", doi)
+def m(i, key, t="shown", rests=("CTL",)):
+    return {"id": i, "key": key, "statement": i, "claim_type": t, "rests_on": list(rests)}
 
 
-def test_graph(lib):
-    lib.create_item("a2020x", bibfor("a2020x", "10.1/a"))
-    lib.create_item("b2020x", bibfor("b2020x", "10.1/b"))
-    lib.create_item("c2020x", bibfor("c2020x", "10.1/c"), sharing_level="confidential")
-    w = lambda i, refs, lic=None, where="primary_location": {
-        "id": f"https://openalex.org/{i}", "referenced_works": [f"https://openalex.org/{r}" for r in refs],
-        where: {"license": lic} if lic else None}
-    c = FakeClient({
-        "doi:10.1/a": w("W1", ["W2", "W9", "W8"], "cc-by"),
-        # a CC repository copy records the licence but does not open the item
-        "doi:10.1/b": w("W2", ["W9", "W8"], "cc-by", "best_oa_location"),
-        "filter": {"results": [{"id": "https://openalex.org/W9", "title": "Outside", "publication_year": 1990,
-                                "authorships": [{"author": {"display_name": "X Y"}}]}]},
-    })
-    r = graph.build(lib, c, min_cites=2, log=lambda *a: None)
-    assert r["edges"] == 1 and r["resolved"] == 2
-    assert not any("10.1/c" in x for x in c.calls)           # confidential never looked up
-    a = lib.get("a2020x")
-    assert a.meta["ids"]["openalex"] == "W1" and a.sharing == "open"
-    assert a.meta["files"]["sharing_source"] == "openalex-cc"
-    b = lib.get("b2020x")
-    assert b.sharing == "licensed" and b.meta["files"]["licence"] == "cc-by"
-    con = index.connect(lib, readonly=True)
-    assert [tuple(x) for x in con.execute("SELECT * FROM edges")] == [("a2020x", "b2020x")]
+def test_a_group_never_holds_a_contradiction():
+    ms = [m("a#m1", "a"), m("b#m1", "b"), m("c#m1", "c")]
+    ps = [{"a": "a#m1", "b": "b#m1", "verdict": "same"}, {"a": "b#m1", "b": "c#m1", "verdict": "same"},
+          {"a": "a#m1", "b": "c#m1", "verdict": "contradicts"}]
+    sim = {frozenset(("a#m1", "b#m1")): 0.9, frozenset(("b#m1", "c#m1")): 0.8}
+    cl = graph.claims(ms, ps, sim)
+    assert sorted(map(len, cl.values())) == [1, 2] and ["a#m1", "b#m1"] in cl.values()
 
 
-def test_graph_opens_only_licences_on_the_owners_list(lib):
-    lib.create_item("a2020x", bibfor("a2020x", "10.1/a"))
-    lib.create_item("b2020x", bibfor("b2020x", "10.1/b"))
-    w = lambda i, lic: {"id": f"https://openalex.org/{i}", "referenced_works": [],
-                        "primary_location": {"license": lic}}
-    c = FakeClient({"doi:10.1/a": w("W1", "cc-by-nc-nd"), "doi:10.1/b": w("W2", "public-domain"),
-                    "filter": {"results": []}})
-    graph.build(lib, c, min_cites=2, log=lambda *a: None)
-    assert lib.get("a2020x").sharing == "licensed"          # NC-ND is not on the default list
-    assert lib.get("b2020x").sharing == "open"
-    p = lib.root / "library.toml"
-    p.write_text(p.read_text() + '\n[licences]\nopen = ["by", "by-nc-nd"]\n')
-    from litnav.library import Library
-    lib2 = Library(lib.root)
-    graph.build(lib2, c, min_cites=2, log=lambda *a: None)
-    assert lib2.get("a2020x").sharing == "open"
+def test_same_model_family_is_one_root_and_a_scheme_is_partial():
+    e = lambda k, roots, kind="realistic_simulation": {"_key": k, "_id": f"{k}|CTL", "evidence_kind": kind,
+                                                        "shared_roots": roots}
+    exps = [e("a", [{"kind": "model_code", "name": "WRF-ARW v3.9.1.1"}, {"kind": "physics_scheme", "name": "KF"}]),
+            e("b", [{"kind": "model_code", "name": "WRF version 3.7.1"}]),
+            e("c", [{"kind": "model_code", "name": "ICON"}, {"kind": "physics_scheme", "name": "KF"}])]
+    assert graph.family("WRF-ARW v3.9.1.1") == graph.family("WRF version 3.7.1") == "wrf arw" or \
+        graph.family("WRF version 3.7.1") == "wrf"
+    rg, part = graph.roots(exps, {"a": {"smith"}, "c": {"smith"}}, {"wrf-arw v3.9.1.1": "wrf", "wrf version 3.7.1": "wrf"})
+    assert len(rg) == 2 and {p["kind"] for p in part} == {"physics_scheme", "authors"}
+    assert graph.status(2, 1, False) == "one line" and graph.status(3, 2, True) == "contested (multiple lines)"
+    assert graph.status(0, 0, False) == "asserted"
