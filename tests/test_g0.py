@@ -74,6 +74,17 @@ def test_sample_push_tally_and_synthesis(ilib, monkeypatch):
     assert "Gravity waves radiate" in sent[0]                         # the open paper's text
     assert "Cold pools spread beneath" not in sent[0]                 # never the licensed one's
 
+    (rd / "review-draft-1.json").write_text(json.dumps({"gemini": {"verdict": "ok", "issues": []}}))
+    monkeypatch.setattr(g0, "registry_classes", lambda rd: [
+        {"id": "les", "name": "LES", "terms": ["LES"], "process": "turbulence", "papers": ["a"],
+         "grid_spacings_m": [100.0, 300.0], "span_m": [100.0, 300.0], "sources": []}])
+    d1 = json.loads((rd / "draft-1.json").read_text())
+    d1["schema"]["proposed_rules"] = [{"rule": "LES at 200 m or finer.", "inventories": []}]
+    (rd / "draft-1.json").write_text(json.dumps(d1))
+    g0.revise(lib, rd, guidance="Give the G1 prompt a JSON example.")
+    assert "spread, not a line" in sent[-1] and "Give the G1 prompt a JSON example." in sent[-1]
+    assert (rd / "guidance-draft-1.md").is_file() and g0.drafts(rd)[-1].name == "draft-2.json"
+
 
 def test_open_papers_refuses_a_licensed_paper(ilib):
     lib = strict(ilib)

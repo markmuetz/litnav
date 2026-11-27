@@ -808,15 +808,30 @@ def review(lib, rd: Path, *, who=REVIEWERS) -> dict:
     return out
 
 
-def revise(lib, rd: Path, *, model: str = DRAFTER) -> dict:
+def revise(lib, rd: Path, *, model: str = DRAFTER, guidance: str = "") -> dict:
+    """The next draft, from the last one, its review(s) and the convention check of its rules (every grid
+    spacing tested against the model registry's stated cases). guidance: further instructions from the
+    person running it, given verbatim and recorded in guidance-<draft>.md."""
     d = drafts(rd)[-1]
     rv = rd / f"review-{d.stem}.json"
     if not rv.is_file():
         raise FileNotFoundError(f"no review of {d.stem} yet: `litnav g0 review`")
-    extra = ("# Your draft\n" + json.dumps(json.loads(d.read_text())["schema"], indent=1, ensure_ascii=False)
-             + "\n\n# Two reviews of it\n" + rv.read_text()
+    draft = json.loads(d.read_text())["schema"]
+    conv = [{"rule": r["rule"], "conventions": [c for c in r["conventions"] if c["verdict"] != "nothing to check"]}
+            for r in check_rules(rd, draft, "") if any(c["verdict"] != "nothing to check" for c in r["conventions"])]
+    extra = ("# Your draft\n" + json.dumps(draft, indent=1, ensure_ascii=False)
+             + "\n\n# Review(s) of it\n" + rv.read_text()
+             + ("\n\n# Convention check of the rules' grid spacings\nA threshold may stand only as a stated "
+                "convention: a definition of a term, stated by several papers from more than one group, and "
+                "contradicted by no paper using the same term. Where the papers give a spread, keep the range "
+                "and classify by the authors' own label. Each number below was tested against the stated cases "
+                "of the model classes the rule names:\n" + json.dumps(conv, indent=1, ensure_ascii=False)
+                if conv else "")
+             + (f"\n\n# Further instructions\n{guidance}" if guidance else "")
              + "\n\nRevise the draft: act on each issue you agree with, and say in notes which you did not "
                "act on and why.")
+    if guidance:
+        (rd / f"guidance-{d.stem}.md").write_text(guidance, encoding="utf-8")
     out = _claude(model, SYNTH_SYSTEM, _prompt(rd, lib, extra=extra), SCHEMA_OUT)    # open papers too, as in synthesis
     _save_draft(rd, out, model, f"draft-{int(d.stem.split('-')[1]) + 1}", evidence=_prompt(rd, lib))
     return out
