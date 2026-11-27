@@ -87,9 +87,9 @@ def papers(lib, keys: list[str] | None = None) -> list:
 def new_run(lib, draft: Path, *, keys: list[str] | None = None, label: str = "") -> Path:
     prompt, meta = draft_prompt(draft)
     stamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M")
+    js = [j for it in papers(lib, keys) for j in jobs(lib, it, prompt)]      # bad keys fail before the folder
     rd = lib.root / "derived" / "g1" / (stamp + (f"-{label}" if label else ""))
     rd.mkdir(parents=True, exist_ok=False)
-    js = [j for it in papers(lib, keys) for j in jobs(lib, it, prompt)]
     (rd / "prompt.md").write_text(prompt, encoding="utf-8")
     with open(rd / "jobs.jsonl", "w", encoding="utf-8") as f:
         for j in js:
