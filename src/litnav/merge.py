@@ -227,3 +227,14 @@ def agreement(rd: Path, tag: str = "pairs") -> dict:
             "confusion": {f"{a} -> {b}": c for (a, b), c in sorted(conf.items(), key=lambda x: -x[1])},
             "same_precision": round(sum(a and b for a, b in same_p) / max(1, sum(a for a, _ in same_p)), 3),
             "rows": rows}
+
+
+def push_pairs(lib, rd: Path, jobs: str, tag: str, *, submit: bool = False, log=print) -> dict:
+    """Send a file of pair jobs to the cluster spool; results come back to <tag>-results.jsonl (a copy of
+    the jobs is kept as <tag>-jobs.jsonl, so `pairs(rd, tag=tag)` reads them)."""
+    from . import spool
+    js = [json.loads(l) for l in (rd / jobs).read_text().splitlines() if l.strip()]
+    if (rd / jobs).name != f"{tag}-jobs.jsonl":
+        (rd / f"{tag}-jobs.jsonl").write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in js))
+    return spool.push(lib, js, kind="g1", meta={"run_dir": str(rd), "results": f"{tag}-results.jsonl"},
+                      submit=submit, log=log)

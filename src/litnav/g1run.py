@@ -111,10 +111,10 @@ def push(lib, rd: Path, *, submit: bool = True, log=print) -> dict:
 
 def import_batch(lib, b: dict, jobs: dict, fresh: list, server: dict | None, *, log=print) -> None:
     rd = Path(b["run_dir"])
-    with open(rd / "results.jsonl", "a", encoding="utf-8") as f:
+    with open(rd / b.get("results", "results.jsonl"), "a", encoding="utf-8") as f:
         for r in fresh:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    if fresh and server:
+    if fresh and server and not b.get("results"):
         m = json.loads((rd / "run.json").read_text())
         m["model_info"], m["model"] = server, m.get("model") or fresh[0].get("model")
         (rd / "run.json").write_text(json.dumps(m, indent=1))

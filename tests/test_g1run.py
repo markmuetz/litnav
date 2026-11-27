@@ -71,3 +71,11 @@ def test_an_induced_mention_reads_as_a_v7_mention():
                           "conditions": [{"dimension": "region", "value": "Sahel"}]})
     assert m["hedging"] == "strong" and m["cites"] == "Smith 2001" and m["experiment_name"] == "CTL"
     assert m["conditions"] == {"region": "Sahel"} and "_job" not in m
+
+
+def test_a_batch_with_its_own_results_file_keeps_them_apart(tmp_path):
+    (tmp_path / "run.json").write_text("{}")
+    g1run.import_batch(None, {"run_dir": str(tmp_path), "results": "q-results.jsonl"}, {},
+                       [{"id": "x", "ok": True}], {"model": "m"}, log=lambda *a: None)
+    assert (tmp_path / "q-results.jsonl").is_file() and not (tmp_path / "results.jsonl").exists()
+    assert json.loads((tmp_path / "run.json").read_text()) == {}
