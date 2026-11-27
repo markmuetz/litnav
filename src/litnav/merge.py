@@ -23,6 +23,8 @@ def mentions(rd: Path) -> list[dict]:
 def candidates(rd: Path, embedder, *, k: int = 10) -> Path:
     import numpy as np
     ms = mentions(rd)
+    if not ms:
+        raise ValueError(f"{rd}: no mentions (has the run finished?)")
     v = embedder.docs([m["statement"] for m in ms])
     v = v / np.linalg.norm(v, axis=1, keepdims=True).clip(1e-9)
     keys = np.array([m["key"] for m in ms])
