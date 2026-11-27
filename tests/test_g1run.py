@@ -38,7 +38,7 @@ def test_an_induced_index_fills_the_slot_and_records_take_rewrites(ilib, tmp_pat
     rd = g1run.new_run(lib, draft(tmp_path), keys=["jones2019gravity"])
     js = [json.loads(l) for l in (rd / "jobs.jsonl").read_text().splitlines()]
     ix, sec = js[0], js[1]
-    entry = {"name": "CTL", "kind": "realistic_simulation", "grid_spacing": "4 km"}
+    entry = {"name": "CTL", "evidence_kind": "realistic_simulation", "model_or_method": {"name": "UM"}, "grid_spacing": "4 km"}
     res = {ix["id"]: {"id": ix["id"], "ok": True, "output": {"experiments": [entry]}}}
     filled = copyfix.fill(sec, res)
     assert '"CTL"' in filled["messages"][1]["content"] and claims.RUNS_SLOT not in filled["messages"][1]["content"]
@@ -57,3 +57,9 @@ def test_an_induced_index_fills_the_slot_and_records_take_rewrites(ilib, tmp_pat
     assert len(rec["failed"]) == len(js) - 2                          # the other groups have no result
     rep = g1run.report(rd)
     assert rep["papers"] == 1 and rep["mentions"] == 2 and rep["fields"]["chunk"] == 2
+
+
+def test_open_schemas_are_not_sent_as_structured_outputs():
+    from litnav import batch_runner
+    assert not batch_runner.closed(g1run.section_schema(["a"]))
+    assert batch_runner.closed(claims.schema(["a"]))

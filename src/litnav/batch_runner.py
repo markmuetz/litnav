@@ -81,6 +81,18 @@ def strip_limits(schema):
     return schema
 
 
+def closed(schema) -> bool:
+    """Whether every object in the schema sets additionalProperties false, as Anthropic's structured
+    outputs require."""
+    if isinstance(schema, dict):
+        if schema.get("type") == "object" and schema.get("additionalProperties") is not False:
+            return False
+        return all(closed(v) for v in schema.values())
+    if isinstance(schema, list):
+        return all(closed(v) for v in schema)
+    return True
+
+
 def anthropic_chat(model: str, messages: list, *, schema: dict | None = None, timeout: float = 600,
                    effort: str = "") -> tuple[str, str]:
     """One call to the Anthropic API (key from ANTHROPIC_API_KEY), with the schema as a structured
@@ -90,7 +102,7 @@ def anthropic_chat(model: str, messages: list, *, schema: dict | None = None, ti
     msgs = [m for m in messages if m["role"] != "system"]
     kw = {}
     oc = {}
-    if schema:
+    if schema and closed(schema):     # an open schema (an induced format, g1run) is asked for in the prompt only
         oc["format"] = {"type": "json_schema", "schema": strip_limits(schema)}
     if effort:
         oc["effort"] = effort
