@@ -239,6 +239,9 @@ def runs_table(runs: list[dict]) -> str:
     lines = []
     for r in runs or []:
         name = r.get("name") or r.get("run_name") or ""
+        if r.get("kind") not in ("observational_analysis", "model_run", None):   # an induced index (G0 prompt)
+            lines.append("- " + json.dumps(r, ensure_ascii=False))
+            continue
         if r.get("kind") == "observational_analysis":
             ds = ", ".join(" ".join(x for x in (d.get("name"), d.get("version")) if x) for d in r.get("datasets") or [])
             bits = [x for x in (ds, r.get("method"), r.get("region"), r.get("period")) if x]

@@ -1,0 +1,59 @@
+"""G1 run with the G1 prompt of a G0 draft."""
+import json
+
+import pytest
+from test_localmodel import strict
+from test_search import ilib  # noqa: F401
+
+from litnav import claims, copyfix, g1run
+
+PROMPT = "You are extracting a claim graph. " * 30
+
+
+def draft(tmp_path, prompt=PROMPT):
+    p = tmp_path / "draft-2.json"
+    p.write_text(json.dumps({"model": "claude-opus-5-5", "schema": {"g1_prompt": prompt}}))
+    return p
+
+
+def test_jobs_index_first_then_sections_waiting_for_it(ilib, tmp_path):
+    lib = strict(ilib)
+    rd = g1run.new_run(lib, draft(tmp_path))
+    js = [json.loads(l) for l in (rd / "jobs.jsonl").read_text().splitlines()]
+    keys = {j["key"] for j in js}
+    assert "doe2026plans_draft" not in keys and keys                  # never the confidential draft
+    for k in keys:
+        mine = [j for j in js if j["key"] == k]
+        assert mine[0]["role"] == "runs" and mine[0]["id"].endswith("--runs")
+        assert all(j["after"] == mine[0]["id"] and claims.RUNS_SLOT in j["messages"][1]["content"]
+                   and j["messages"][0]["content"].startswith(PROMPT) for j in mine[1:])
+    m = json.loads((rd / "run.json").read_text())
+    assert m["prompt_from"]["drafted_by"] == "claude-opus-5-5" and (rd / "prompt.md").read_text() == PROMPT
+    with pytest.raises(ValueError):
+        g1run.draft_prompt(draft(tmp_path, prompt="short"))
+
+
+def test_an_induced_index_fills_the_slot_and_records_take_rewrites(ilib, tmp_path):
+    lib = strict(ilib)
+    rd = g1run.new_run(lib, draft(tmp_path), keys=["jones2019gravity"])
+    js = [json.loads(l) for l in (rd / "jobs.jsonl").read_text().splitlines()]
+    ix, sec = js[0], js[1]
+    entry = {"name": "CTL", "kind": "realistic_simulation", "grid_spacing": "4 km"}
+    res = {ix["id"]: {"id": ix["id"], "ok": True, "output": {"experiments": [entry]}}}
+    filled = copyfix.fill(sec, res)
+    assert '"CTL"' in filled["messages"][1]["content"] and claims.RUNS_SLOT not in filled["messages"][1]["content"]
+    rows = [res[ix["id"]],
+            {"id": sec["id"], "ok": True, "output": {"experiments": [{"name": "EXP"}], "mentions": [
+                {"statement": "copied words here", "chunk": sec["passages"][0]},
+                {"statement": "fine", "chunk": sec["passages"][0]}]}},
+            {"id": sec["id"] + "-r", "ok": True, "rewrite": [1],
+             "output": {"rewrites": [{"n": 1, "statement": "in own words"}]}},
+            {"id": sec["id"] + "-c", "ok": True, "meaning_check": [1],
+             "output": {"checks": [{"n": 1, "verdict": "same"}]}}]
+    (rd / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    rec = g1run.records(rd)["jones2019gravity"]
+    assert [e["name"] for e in rec["experiments"]] == ["CTL", "EXP"]
+    assert [m["statement"] for m in rec["mentions"]] == ["in own words", "fine"]
+    assert len(rec["failed"]) == len(js) - 2                          # the other groups have no result
+    rep = g1run.report(rd)
+    assert rep["papers"] == 1 and rep["mentions"] == 2 and rep["fields"]["chunk"] == 2

@@ -242,6 +242,9 @@ def _apply(lib, bid, b, d, *, log, final: bool = True) -> int:
     elif b["kind"] == "g0":
         from . import g0
         g0.import_batch(lib, b, jobs, fresh, server, log=log)
+    elif b["kind"] == "g1":
+        from . import g1run
+        g1run.import_batch(lib, b, jobs, fresh, server, log=log)
     else:
         applied = set()
         for r in fresh:

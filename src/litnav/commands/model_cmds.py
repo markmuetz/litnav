@@ -77,6 +77,18 @@ def add(sub):
     p.add_argument("--no-submit", action="store_true")
     p.set_defaults(func=cmd_g0)
 
+    p = sub.add_parser("g1", help="G1 with the G1 prompt of a G0 draft: new (write the jobs), push (to the "
+                       "cluster spool), outside (open papers on the Anthropic API, as a smoke test), report")
+    p.add_argument("action", choices=["new", "push", "outside", "report"])
+    p.add_argument("--draft", help="new: the G0 draft whose g1_prompt to use (draft-N.json)")
+    p.add_argument("--key", "-k", action="append", dest="keys", help="new: only these papers (repeat)")
+    p.add_argument("--label", default="", help="new: a label for the run folder")
+    p.add_argument("--run-dir", help="push/outside/report: the run folder")
+    p.add_argument("--model", default="claude-haiku-5-5", help="outside: the model")
+    p.add_argument("--effort", default="low", help="outside: effort")
+    p.add_argument("--no-submit", action="store_true")
+    p.set_defaults(func=cmd_g1)
+
     p = sub.add_parser("model-registry", help="which models each paper runs, at what grid spacing, and what it "
                        "states about deep convection; aggregated by model family (jobs, then claude-run or push, build)")
     p.add_argument("action", choices=["jobs", "build", "score", "classes"],
@@ -549,6 +561,30 @@ def cmd_g0(a):
                 for c in r["conventions"]:
                     if c["verdict"] != "nothing to check":
                         print(f"  {c['metres']:g} m: {c['verdict']}  ({r['rule'][:70]}...)")
+    return 0
+
+
+def cmd_g1(a):
+    from .. import batch_runner, derived, g0, g1run
+    lib = Library.find(a.library)
+    if a.action == "new":
+        rd = g1run.new_run(lib, Path(a.draft), keys=a.keys, label=a.label)
+        m = json.loads((rd / "run.json").read_text())
+        print(f"{m['jobs']} job(s) for {m['papers']} paper(s) in {rd}")
+        return 0
+    rd = Path(a.run_dir)
+    if a.action == "push":
+        r = g1run.push(lib, rd, submit=not a.no_submit)
+        print(f"pushed {r['jobs']} job(s) as batch {r['batch']}; `litnav queue pull` brings them back")
+    elif a.action == "outside":
+        js = [json.loads(l) for l in (rd / "jobs.jsonl").read_text().splitlines() if l.strip()]
+        bad = [j["id"] for j in js if not g0.outside_ok(lib, j)]
+        if bad:
+            raise derived.Refused(f"{len(bad)} job(s) would send licensed text out, e.g. {bad[:3]}")
+        n = batch_runner.run(rd / "jobs.jsonl", rd / "results.jsonl", f"anthropic:{a.effort}", a.model, concurrency=8)
+        print(f"{n} job(s) done")
+    elif a.action == "report":
+        print(json.dumps(g1run.report(rd), indent=1))
     return 0
 
 
