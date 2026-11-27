@@ -53,5 +53,6 @@ def test_each_pair_is_asked_once_and_answers_map_back(tmp_path):
     assert len(seen) == len(set(seen)) == 4                          # 2 x 2 cross-paper pairs
     j = js[0]
     (rd / "pairs-results.jsonl").write_text(json.dumps({"id": j["id"], "ok": True, "output": {"pairs": [
-        {"n": 1, "verdict": "same", "reason": "r"}, {"n": 9, "verdict": "same", "reason": "bad n"}]}}) + "\n")
+        {"n": 1, "verdict": "same", "reason": "r"}, {"n": 9, "verdict": "same", "reason": "bad n"},
+        {"n": 2, "starts": "something else entirely", "verdict": "same", "reason": "misaligned"}]}}) + "\n")
     assert merge.pairs(rd) == [{"a": j["a"], "b": j["candidates"][0], "verdict": "same", "reason": "r", "rank": 1}]

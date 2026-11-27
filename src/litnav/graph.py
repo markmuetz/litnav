@@ -2,8 +2,9 @@
 
 Input: a G1 run folder with candidates.jsonl and pair verdicts (merge.pairs). Output: graph.json in it.
 
-- Claims (3): mentions joined by "same" verdicts, strongest pair first (embedding cosine), never joining two
-  groups with a "contradicts" verdict between them. Within-paper repeats are not merged (candidates are
+- Claims (3): mentions joined by "same" verdicts, strongest pair first (embedding cosine), joining two
+  groups only if every judged pair between them is "same" (complete linkage over the judged pairs: plain
+  chains of "same" ran one claim through all 20 eval papers). Within-paper repeats are not merged (candidates are
   cross-paper only).
 - Links (4): a shown mention's rests_on experiments support its claim; supports / contradicts / refines
   verdicts between mentions of different claims become claim-to-claim links, with their count.
@@ -66,19 +67,19 @@ def claims(ms: list[dict], pairs: list[dict], sim: dict) -> dict[str, list[str]]
     ids = [m["id"] for m in ms]
     uf = UF(ids)
     members = {i: {i} for i in ids}
-    contra = defaultdict(set)
+    other = defaultdict(set)                       # judged pairs with any verdict but "same"
     for p in pairs:
-        if p["verdict"] == "contradicts":
-            contra[p["a"]].add(p["b"])
-            contra[p["b"]].add(p["a"])
+        if p["verdict"] != "same":
+            other[p["a"]].add(p["b"])
+            other[p["b"]].add(p["a"])
     same = sorted((p for p in pairs if p["verdict"] == "same"),
                   key=lambda p: -sim.get(frozenset((p["a"], p["b"])), 0))
     for p in same:
         ra, rb = uf.find(p["a"]), uf.find(p["b"])
         if ra == rb:
             continue
-        if any(contra[x] & members[rb] for x in members[ra]):
-            continue                                       # would hold a contradiction
+        if any(other[x] & members[rb] for x in members[ra]):
+            continue                                       # complete linkage: every judged pair is "same"
         uf.union(ra, rb)
         members[rb] |= members.pop(ra)
     return {f"c{n:05d}": sorted(v) for n, v in enumerate(sorted(members.values(), key=lambda v: (-len(v), min(v))), 1)}
