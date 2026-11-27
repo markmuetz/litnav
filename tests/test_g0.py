@@ -133,3 +133,28 @@ def test_rules_cite_papers_and_numbers_are_checked(tmp_path):
     assert res[0]["papers"] == ["a2020", "b2021"] and res[0]["numbers_not_in_evidence"] == []
     assert res[1]["n_papers"] == 0 and res[1]["numbers_not_in_evidence"] == ["0.3"]
     assert "inventories" in g0.SCHEMA_OUT["properties"]["proposed_rules"]["items"]["required"]
+
+
+def test_a_threshold_is_checked_as_a_convention_against_the_registry(tmp_path):
+    classes = [
+        {"id": "large_eddy_simulation", "name": "Large-eddy simulation", "process": "turbulence",
+         "deep_convection": "explicit", "terms": ["large-eddy simulation", "LES"], "papers": ["a", "b", "c"],
+         "grid_spacings_m": [25.0, 100.0, 250.0], "span_m": [25.0, 250.0],
+         "sources": [{"key": "a", "grid_spacing": "25 m"}, {"key": "b", "grid_spacing": "100 m"},
+                     {"key": "c", "grid_spacing": "50–250 m"}]},
+        {"id": "convection_permitting", "name": "Convection-permitting model", "process": "deep_convection",
+         "deep_convection": "explicit", "terms": ["convection-permitting"], "papers": ["d"],
+         "grid_spacings_m": [500.0, 4000.0], "span_m": [500.0, 4000.0],
+         "sources": [{"key": "d", "grid_spacing": "0.5 to 4 km"}]}]
+    spread = g0.check_conventions("Large-eddy if spacing is 500 m or finer.", classes)
+    assert spread[0]["metres"] == 500 and spread[0]["verdict"] == "spread, not a line"
+    assert spread[0]["other_classes_at"] == ["convection_permitting"]
+    cand = g0.check_conventions("Label a run LES at 250 m or finer.", classes)
+    assert cand[0]["verdict"] == "convention candidate" and cand[0]["classes"][0]["stated_by"] == ["c"]
+    assert cand[0]["classes"][0]["below"] == 2 and cand[0]["classes"][0]["above"] == 0
+    inside = g0.check_conventions("LES finer than 60 m.", classes)
+    assert inside[0]["verdict"] == "spread, not a line"
+    assert g0.check_conventions("Runs over 3 km are coarse.", [])[0]["verdict"] == "nothing to check"
+    (tmp_path / "inventory_index.json").write_text("{}")
+    res = g0.check_rules(tmp_path, {"proposed_rules": [{"rule": "LES at 250 m.", "inventories": []}]}, "", classes)
+    assert res[0]["conventions"][0]["verdict"] == "convention candidate"

@@ -688,19 +688,98 @@ def synthesize(lib, rd: Path, *, model: str = DRAFTER, n_open: int = 10, open_ch
 _NUM = __import__("re").compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.]*\d)")
 
 
-def check_rules(rd: Path, out: dict, evidence: str) -> list[dict]:
-    """For each proposed rule: the papers it says it rests on (Paper N mapped to keys) and the numbers in
-    it that appear nowhere in the evidence the model was given (the model's own additions, to check).
-    Single digits are not checked (counts such as 'two grades' and list numbering)."""
-    import re
+def check_rules(rd: Path, out: dict, evidence: str, classes: list[dict] | None = None) -> list[dict]:
+    """For each proposed rule: the papers it says it rests on (Paper N mapped to keys), the numbers in
+    it that appear nowhere in the evidence the model was given (the model's own additions, to check),
+    and for each grid spacing it names, the convention test against the model registry's classes
+    (`check_conventions`; core.md 4a point 7 in the hk27 docs). Single digits are not checked for the
+    evidence (counts such as 'two grades' and list numbering)."""
     idx = json.loads((rd / "inventory_index.json").read_text()) if (rd / "inventory_index.json").is_file() else {}
+    if classes is None:
+        classes = registry_classes(rd)
     res = []
     for r in out.get("proposed_rules") or []:
         keys = sorted({idx[str(i)] for i in r.get("inventories") or [] if str(i) in idx})
         nums = {n for n in _NUM.findall(r.get("rule", "")) if len(n) > 1}
         missing = sorted(n for n in nums if not re.search(rf"(?<![\w.]){re.escape(n)}(?![\w]|\.\d)", evidence))
         res.append({"rule": r.get("rule", "")[:120], "papers": keys, "n_papers": len(keys),
-                    "numbers_not_in_evidence": missing})
+                    "numbers_not_in_evidence": missing,
+                    "conventions": check_conventions(r.get("rule", ""), classes)})
+    return res
+
+
+# A length, or a range of lengths, with its unit: "500 m", "1 to 5 km", "125–500 m".
+_LEN = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?:\s*(?:-|–|to)\s*(\d+(?:\.\d+)?))?\s*(km|m)\b")
+_GENERIC = {"simulation", "simulations", "model", "models", "modelling", "modeling", "resolution", "resolving",
+            "run", "runs", "scale", "scales", "type", "like", "the", "a", "an", "of"}
+
+
+def _lengths(text: str) -> list[float]:
+    out = []
+    for a, b, unit in _LEN.findall((text or "").lower()):
+        f = 1000.0 if unit == "km" else 1.0
+        out += [float(a) * f] + ([float(b) * f] if b else [])
+    return out
+
+
+def _words(s: str) -> str:
+    return " " + " ".join(re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).split()) + " "
+
+
+def _class_named(c: dict, text: str) -> bool:
+    """Whether the rule names the class: one of its terms, or a term without its generic words
+    ('large-eddy simulation' -> 'large eddy'), appears in the rule."""
+    for t in list(c.get("terms") or []) + [c.get("name") or ""]:
+        w = _words(t).split()
+        cores = {" ".join(w), " ".join(x for x in w if x not in _GENERIC)}
+        for core in cores:
+            if len(core) >= 3 and (f" {core} " in text or f" {core}s " in text):
+                return True
+    return False
+
+
+def registry_classes(rd: Path) -> list[dict]:
+    """The induced model classes of the newest model-registry run beside this G0 run, or none."""
+    base = Path(rd).resolve().parents[1] / "model-registry"
+    found = sorted(base.glob("*/classes.json")) if base.is_dir() else []
+    return json.loads(found[-1].read_text())["classes"] if found else []
+
+
+def check_conventions(rule: str, classes: list[dict]) -> list[dict]:
+    """The convention test for the grid spacings a rule names (Mark, 27 Nov 2026: a threshold may enter
+    if the papers always use it). For each length in the rule and each registry class the rule names:
+    the stated spacings below, at and above it, and the papers whose definitions state the value; and
+    the other classes (same process or same deep-convection state) whose stated spans include it.
+    Verdict: 'spread, not a line' if a named class has stated cases on both sides, or another class is
+    stated at that spacing; 'convention candidate' if definitions state it and nothing contradicts it;
+    'not stated' otherwise; 'nothing to check' if the rule names no registry class. How many papers
+    suffice is reported, not decided here."""
+    text = _words(rule)
+    named = [c for c in classes if _class_named(c, text)]
+    res = []
+    for x in sorted(set(_lengths(rule))):
+        if not named:
+            res.append({"metres": x, "verdict": "nothing to check", "classes": [], "other_classes_at": []})
+            continue
+        rows = []
+        for c in named:
+            g = [float(v) for v in c.get("grid_spacings_m") or []]
+            stated_by = sorted({s.get("key") for s in c.get("sources") or []
+                                if any(abs(v - x) < 1e-6 for v in _lengths(s.get("grid_spacing") or ""))})
+            rows.append({"class": c.get("id"), "papers": len(c.get("papers") or []), "stated": len(g),
+                         "span_m": c.get("span_m"), "below": sum(v < x for v in g),
+                         "at": sum(v == x for v in g), "above": sum(v > x for v in g), "stated_by": stated_by})
+        procs = {c.get("process") for c in named} | {("dc", c.get("deep_convection")) for c in named}
+        others = [c.get("id") for c in classes if c not in named and c.get("span_m")
+                  and ({c.get("process"), ("dc", c.get("deep_convection"))} & procs)
+                  and c["span_m"][0] <= x <= c["span_m"][1]]
+        if others or any(r["below"] and r["above"] for r in rows):
+            verdict = "spread, not a line"
+        elif any(r["stated_by"] for r in rows):
+            verdict = "convention candidate"
+        else:
+            verdict = "not stated"
+        res.append({"metres": x, "verdict": verdict, "classes": rows, "other_classes_at": others})
     return res
 
 

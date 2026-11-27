@@ -62,7 +62,7 @@ def add(sub):
     p = sub.add_parser("g0", help="G0: induce the domain schema from the papers, blind (survey, inventories, "
                        "tally, then Fable drafts and Opus and Gemini review): sample, push, status, tally, "
                        "synthesize, review, revise")
-    p.add_argument("action", choices=["sample", "jobs", "push", "status", "tally", "synthesize", "review", "revise"],
+    p.add_argument("action", choices=["sample", "jobs", "push", "status", "tally", "synthesize", "review", "revise", "check"],
                    help="jobs: write jobs.jsonl without pushing (then `litnav claude-run`)")
     p.add_argument("--open-only", action="store_true", help="sample: the corpus is the open papers")
     p.add_argument("--like", help="sample: copy this run folder's sample and corpus")
@@ -539,6 +539,16 @@ def cmd_g0(a):
     elif a.action == "revise":
         g0.revise(lib, rd, model=a.model or g0.FABLE)
         print(f"draft written: {g0.drafts(rd)[-1]}")
+    elif a.action == "check":
+        for d in g0.drafts(rd):
+            ev = (rd / "synthesis.prompt.md").read_text(encoding="utf-8") if (rd / "synthesis.prompt.md").is_file() else ""
+            res = g0.check_rules(rd, json.loads(d.read_text())["schema"], ev)
+            (rd / f"rules-check-{d.stem}.json").write_text(json.dumps(res, indent=1, ensure_ascii=False))
+            print(f"{d.stem}: {len(res)} rule(s)")
+            for r in res:
+                for c in r["conventions"]:
+                    if c["verdict"] != "nothing to check":
+                        print(f"  {c['metres']:g} m: {c['verdict']}  ({r['rule'][:70]}...)")
     return 0
 
 
