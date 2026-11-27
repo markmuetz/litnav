@@ -63,3 +63,11 @@ def test_open_schemas_are_not_sent_as_structured_outputs():
     from litnav import batch_runner
     assert not batch_runner.closed(g1run.section_schema(["a"]))
     assert batch_runner.closed(claims.schema(["a"]))
+
+
+def test_an_induced_mention_reads_as_a_v7_mention():
+    m = g1run.as_mention({"statement": "s", "chunk": "c", "claim_type": "shown", "hedging": "firm",
+                          "citations": ["Smith 2001"], "rests_on": ["CTL"], "_job": "x",
+                          "conditions": [{"dimension": "region", "value": "Sahel"}]})
+    assert m["hedging"] == "strong" and m["cites"] == "Smith 2001" and m["experiment_name"] == "CTL"
+    assert m["conditions"] == {"region": "Sahel"} and "_job" not in m

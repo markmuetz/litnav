@@ -169,3 +169,45 @@ def report(rd: Path) -> dict:
             "mentions": len(ms), "mentions_per_paper": round(len(ms) / max(1, len(recs)), 1),
             "experiments": sum(len(p["experiments"]) for p in recs.values()),
             "fields": dict(keys.most_common(40))}
+
+
+HEDGE = {"firm": "strong", "strong": "strong", "moderate": "moderate", "weak": "weak"}
+
+
+def as_mention(m: dict) -> dict:
+    """An induced mention in the v7 shape the paper-eval judge reads (statement, chunk, quote, claim type,
+    hedging, cites, conditions, experiment); the induced fields are kept beside them."""
+    cond = m.get("conditions")
+    if isinstance(cond, list):
+        cond = {str(c.get("dimension")): c.get("value") for c in cond if isinstance(c, dict) and c.get("dimension")}
+    cites = m.get("citations")
+    rests = m.get("rests_on") or []
+    return {**{k: v for k, v in m.items() if not k.startswith("_")},
+            "statement": m.get("statement", ""), "chunk": m.get("chunk", ""), "quote": m.get("quote", ""),
+            "source": m.get("source", "text"), "claim_type": m.get("claim_type", ""),
+            "hedging": HEDGE.get(str(m.get("hedging", "")).lower(), m.get("hedging", "")),
+            "cites": "; ".join(map(str, cites)) if isinstance(cites, list) else (cites or ""),
+            "conditions": cond if isinstance(cond, dict) else {},
+            "experiment_name": rests[0] if isinstance(rests, list) and rests else "",
+            "evidence_type": "unknown"}
+
+
+def to_paper_eval(rd: Path, out: Path, keys: list[str] | None = None) -> Path:
+    """A paper-eval run folder (task mentions) from a G1 run, for `litnav paper-eval judge/report`:
+    one job and one result per paper (evidence type is not compared: the induced kinds differ)."""
+    recs = records(rd)
+    out.mkdir(parents=True, exist_ok=True)
+    m = json.loads((rd / "run.json").read_text())
+    js, rs = [], []
+    for k, p in recs.items():
+        if keys and k not in keys:
+            continue
+        jid = f"mentions-{k}--g01"
+        js.append({"id": jid, "key": k, "task": "mentions", "group": 1})
+        rs.append({"id": jid, "ok": not p["failed"], "model": m.get("model", ""),
+                   "output": {"mentions": [as_mention(x) for x in p["mentions"]]}})
+    (out / "jobs.jsonl").write_text("".join(json.dumps(j) + "\n" for j in js))
+    (out / "results.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rs))
+    (out / "run.json").write_text(json.dumps({"task": "mentions", "from_g1": str(rd), "model": m.get("model", ""),
+                                              "prompt_from": m.get("prompt_from"), "prompt_version": "g0"}, indent=1))
+    return out
