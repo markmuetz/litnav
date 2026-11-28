@@ -56,3 +56,16 @@ def test_each_pair_is_asked_once_and_answers_map_back(tmp_path):
         {"n": 1, "verdict": "same", "reason": "r"}, {"n": 9, "verdict": "same", "reason": "bad n"},
         {"n": 2, "starts": "something else entirely", "verdict": "same", "reason": "misaligned"}]}}) + "\n")
     assert merge.pairs(rd) == [{"a": j["a"], "b": j["candidates"][0], "verdict": "same", "reason": "r", "rank": 1}]
+
+
+def test_a_strict_answer_without_a_shared_subject_is_different(tmp_path):
+    rd = run(tmp_path)
+    merge.candidates(rd, Fake(), k=2)
+    (rd / "first-jobs.jsonl").write_text(json.dumps({"id": "p", "a": "a#m1", "candidates": ["b#m1", "b#m2"]}) + "\n")
+    (rd / "first-results.jsonl").write_text(json.dumps({"id": "p", "ok": True, "output": {"pairs": [
+        {"n": 1, "verdict": "supports", "reason": ""}, {"n": 2, "verdict": "different", "reason": ""}]}}) + "\n")
+    js = [json.loads(l) for l in merge.strict_jobs(Lib(), rd, source="first", tag="s").read_text().splitlines()]
+    assert [j["candidates"] for j in js] == [["b#m1"]]
+    (rd / "s-results.jsonl").write_text(json.dumps({"id": js[0]["id"], "ok": True, "output": {
+        "a_subject": "x", "b_subject": "y", "shared_subject": False, "verdict": "supports", "reason": "r"}}) + "\n")
+    assert merge.pairs(rd, tag="s")[0]["verdict"] == "different"

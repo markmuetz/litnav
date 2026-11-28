@@ -165,6 +165,11 @@ def pairs(rd: Path, results: str = "pairs-results.jsonl", jobs: str = "pairs-job
         o = r.get("output") if r.get("ok") else None
         if not j or not isinstance(o, dict):
             continue
+        if "pairs" not in o and o.get("verdict") in VERDICTS:          # a strict one-pair answer
+            v = o["verdict"] if o.get("shared_subject", True) else "different"
+            out.append({"a": j["a"], "b": j["candidates"][0], "verdict": v, "reason": o.get("reason", ""),
+                        "rank": 1, "subjects": [o.get("a_subject", ""), o.get("b_subject", "")]})
+            continue
         for p in o.get("pairs") or []:
             n = p.get("n")
             if (isinstance(n, int) and 1 <= n <= len(j["candidates"]) and p.get("verdict") in VERDICTS
@@ -238,3 +243,51 @@ def push_pairs(lib, rd: Path, jobs: str, tag: str, *, submit: bool = False, log=
         (rd / f"{tag}-jobs.jsonl").write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in js))
     return spool.push(lib, js, kind="g1", meta={"run_dir": str(rd), "results": f"{tag}-results.jsonl"},
                       submit=submit, log=log)
+
+
+# ---- step 2b: a stricter second look at the pairs a first pass called related (one pair a call)
+
+STRICT_SYSTEM = """You check whether two statements extracted from different scientific papers on atmospheric
+convection and climate are related as claims. Most pairs that share a topic are NOT related claims.
+
+First name the subject of each: the specific thing it makes a claim about (a quantity, process, model
+behaviour or method, and where or when), in at most 15 words. Then decide whether they share that subject:
+the same quantity or process, in a comparable setting. Sharing a field, a model, a dataset, a region or a
+method is not enough. A statement that only describes a setup, a dataset or a paper's aims shares a
+subject only with another statement about that same setup, dataset or aim.
+
+Only if they share the subject, give the relation:
+- same: the same claim in the same direction under compatible conditions (a restatement or replication).
+- supports: a different claim about that subject that agrees with it and adds evidence for it.
+- contradicts: the two cannot both hold under the conditions given (opposite direction, sign or
+  conclusion). Opposite results under clearly different conditions are "refines".
+- refines: one narrows, qualifies or bounds the other (where or when it holds, by how much, an exception).
+If they do not share the subject, the verdict is "different".
+
+Judge only from what the statements, their conditions and quotes say, not from outside knowledge of what
+is true. Direction matters: "X strengthens Y" and "X weakens Y" are not the same claim."""
+
+STRICT_SCHEMA = {"type": "object", "additionalProperties": False,
+                 "required": ["a_subject", "b_subject", "shared_subject", "verdict", "reason"], "properties": {
+    "a_subject": {"type": "string"}, "b_subject": {"type": "string"}, "shared_subject": {"type": "boolean"},
+    "verdict": {"type": "string", "enum": list(VERDICTS)}, "reason": {"type": "string"}}}
+
+
+def strict_jobs(lib, rd: Path, *, source: str, tag: str, prefix: str = "strict") -> Path:
+    """One job per pair that the `source` run called anything but different."""
+    ms = {m["id"]: m for m in mentions(rd)}
+    title = lambda k: lib.get(k).title or ""
+    js = []
+    for p in pairs(rd, tag=source):
+        if p["verdict"] == "different":
+            continue
+        a, b = ms[p["a"]], ms[p["b"]]
+        js.append({"id": f"{prefix}-{p['a']}--{p['b']}", "kind": "eval", "task": "pairs", "key": a["key"],
+                   "keys": sorted({a["key"], b["key"]}), "a": p["a"], "candidates": [p["b"]],
+                   "schema": STRICT_SCHEMA,
+                   "messages": [{"role": "system", "content": STRICT_SYSTEM},
+                                {"role": "user", "content": f"A: {render(a, title(a['key']))}\n\n"
+                                 f"B: {render(b, title(b['key']))}\n\nReply with JSON only."}]})
+    out = rd / f"{tag}-jobs.jsonl"
+    out.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in js), encoding="utf-8")
+    return out
